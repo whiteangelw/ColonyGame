@@ -12,6 +12,17 @@ public class TaskManager : MonoBehaviour
     private readonly List<Task> pendingTasks = new List<Task>();
     private readonly Dictionary<TaskType, ITaskHandler> handlers =
         new Dictionary<TaskType, ITaskHandler>();
+    private readonly List<Task> taskCandidateBuffer = new List<Task>();
+    private readonly List<Task> batchCandidateBuffer = new List<Task>();
+
+    [Header("Orçamento de busca")]
+    [SerializeField, Min(1)] private int maximumTaskSearchesPerFrame = 2;
+
+    private int taskSearchBudgetFrame = -1;
+    private int taskSearchesThisFrame;
+    private int lastInvalidTaskCleanupFrame = -1;
+    private Vector2Int candidateSortOrigin;
+    private DuplicantWorkProfile candidateWorkProfile;
 
     [Header("Transporte em lote")]
     [SerializeField, Min(1)]
@@ -110,13 +121,7 @@ public class TaskManager : MonoBehaviour
             item.transform.position
         );
 
-        if (!item.IsReadyForHaul
-            || StructureManager.Instance == null
-            || !StructureManager.Instance.HasReachableStorageFor(
-                item.type,
-                1,
-                gridPos
-            ))
+        if (!item.IsReadyForHaul)
         {
             return;
         }
@@ -159,35 +164,48 @@ public class TaskManager : MonoBehaviour
         return task != null && pendingTasks.Contains(task);
     }
 
-    public Task GetNextTaskFor(Vector2Int dupeGridPos, out List<Vector2Int> calculatedPath, DuplicantCapabilityProfile profile = null)
+    public bool TryAcquireTaskSearchSlot()
+    {
+        if (taskSearchBudgetFrame != Time.frameCount)
+        {
+            taskSearchBudgetFrame = Time.frameCount;
+            taskSearchesThisFrame = 0;
+        }
+
+        if (taskSearchesThisFrame >= maximumTaskSearchesPerFrame)
+        {
+            return false;
+        }
+
+        taskSearchesThisFrame++;
+        return true;
+    }
+
+    public Task GetNextTaskFor(
+        Vector2Int dupeGridPos,
+        out List<Vector2Int> calculatedPath,
+        DuplicantCapabilityProfile profile = null,
+        DuplicantWorkProfile workProfile = null)
     {
         RemoveInvalidTasks();
 
         calculatedPath = null;
-        List<Task> candidates = new List<Task>();
+        taskCandidateBuffer.Clear();
 
         for (int i = 0; i < pendingTasks.Count; i++)
         {
             Task task = pendingTasks[i];
             if (task == null || task.isAssigned) continue;
 
-            ITaskHandler handler = GetHandler(task.type);
-            if (handler == null || !handler.CanExecute(null, task)) continue;
-
-            candidates.Add(task);
+            RefreshDynamicTaskPosition(task);
+            taskCandidateBuffer.Add(task);
         }
 
-        candidates.Sort((a, b) =>
-        {
-            int priorityComparison = b.priority.CompareTo(a.priority);
-            if (priorityComparison != 0) return priorityComparison;
+        candidateSortOrigin = dupeGridPos;
+        candidateWorkProfile = workProfile;
+        taskCandidateBuffer.Sort(CompareByPriorityAndDistance);
 
-            int distanceA = SquaredGridDistance(dupeGridPos, a.gridPosition);
-            int distanceB = SquaredGridDistance(dupeGridPos, b.gridPosition);
-            return distanceA.CompareTo(distanceB);
-        });
-
-        foreach (Task task in candidates)
+        foreach (Task task in taskCandidateBuffer)
         {
             if (ReachabilityManager.Instance != null
                 && ReachabilityManager.Instance.IsReady)
@@ -209,6 +227,9 @@ public class TaskManager : MonoBehaviour
 
                 if (!canReach) continue;
             }
+
+            ITaskHandler handler = GetHandler(task.type);
+            if (handler == null || !handler.CanExecute(null, task)) continue;
 
             List<Vector2Int> path = TaskNavigationUtility.GetPathToTask(
                 dupeGridPos,
@@ -238,7 +259,7 @@ public class TaskManager : MonoBehaviour
         selectedTask = null;
         calculatedPath = null;
 
-        List<Task> candidates = new List<Task>();
+        batchCandidateBuffer.Clear();
 
         foreach (Task task in pendingTasks)
         {
@@ -266,19 +287,20 @@ public class TaskManager : MonoBehaviour
                 continue;
             }
 
-            candidates.Add(task);
+            batchCandidateBuffer.Add(task);
         }
 
-        candidates.Sort((a, b) =>
-            SquaredGridDistance(dupeGridPos, a.gridPosition)
-                .CompareTo(SquaredGridDistance(dupeGridPos, b.gridPosition))
-        );
+        candidateSortOrigin = dupeGridPos;
+        batchCandidateBuffer.Sort(CompareByDistance);
 
-        int checks = Mathf.Min(maximumBatchPathChecks, candidates.Count);
+        int checks = Mathf.Min(
+            maximumBatchPathChecks,
+            batchCandidateBuffer.Count
+        );
 
         for (int i = 0; i < checks; i++)
         {
-            Task candidate = candidates[i];
+            Task candidate = batchCandidateBuffer[i];
 
             if (ReachabilityManager.Instance != null
                 && ReachabilityManager.Instance.IsReady
@@ -317,8 +339,85 @@ public class TaskManager : MonoBehaviour
         return deltaX * deltaX + deltaY * deltaY;
     }
 
+    private int CompareByPriorityAndDistance(Task a, Task b)
+    {
+        int scoreComparison = GetTaskSelectionScore(
+            b,
+            candidateSortOrigin,
+            candidateWorkProfile
+        ).CompareTo(
+            GetTaskSelectionScore(
+                a,
+                candidateSortOrigin,
+                candidateWorkProfile
+            )
+        );
+
+        return scoreComparison != 0
+            ? scoreComparison
+            : CompareByDistance(a, b);
+    }
+
+    private int CompareByDistance(Task a, Task b)
+    {
+        return SquaredGridDistance(candidateSortOrigin, a.gridPosition)
+            .CompareTo(
+                SquaredGridDistance(candidateSortOrigin, b.gridPosition)
+            );
+    }
+
+    public int GetTaskSelectionScore(
+        Task task,
+        Vector2Int duplicantPosition,
+        DuplicantWorkProfile workProfile = null)
+    {
+        if (task == null)
+        {
+            return int.MinValue;
+        }
+
+        int globalPriorityScore = task.priority * 1000;
+        int affinityScore = workProfile != null
+            ? workProfile.GetAffinity(task.type) * 100
+            : 0;
+
+        int gridDistance = Mathf.Abs(
+            duplicantPosition.x - task.gridPosition.x
+        ) + Mathf.Abs(
+            duplicantPosition.y - task.gridPosition.y
+        );
+
+        int distancePenalty = Mathf.Min(gridDistance, 99);
+
+        return globalPriorityScore
+            + affinityScore
+            - distancePenalty;
+    }
+
+    private static void RefreshDynamicTaskPosition(Task task)
+    {
+        if (task.type != TaskType.HaulResource
+            || task.targetBlueprint != null
+            || task.targetItem == null
+            || GridManager.Instance == null)
+        {
+            return;
+        }
+
+        task.gridPosition = GridManager.Instance.WorldToGridPosition(
+            task.targetItem.transform.position
+        );
+    }
+
     private void RemoveInvalidTasks()
     {
+        if (lastInvalidTaskCleanupFrame == Time.frameCount)
+        {
+            return;
+        }
+
+        lastInvalidTaskCleanupFrame = Time.frameCount;
+
         if (GridManager.Instance == null)
         {
             return;

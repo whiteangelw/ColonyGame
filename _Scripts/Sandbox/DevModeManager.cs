@@ -364,6 +364,27 @@ public class DevModeManager : Singleton<DevModeManager>
         GUILayout.Label($"Atribuída: {(task != null && task.isAssigned ? "Sim" : "Não")}");
 
         GUILayout.Space(8f);
+        GUILayout.Label("PERFIL DE TRABALHO");
+        GUILayout.Label(
+            $"Perfil: {(selectedDuplicant.workProfile != null ? selectedDuplicant.workProfile.name : "Neutro")}" 
+        );
+
+        if (task != null)
+        {
+            int affinity = selectedDuplicant.GetWorkAffinity(task.type);
+            int score = TaskManager.Instance != null
+                ? TaskManager.Instance.GetTaskSelectionScore(
+                    task,
+                    selectedDuplicant.gridPosition,
+                    selectedDuplicant.workProfile
+                )
+                : 0;
+
+            GUILayout.Label($"Afinidade atual: {affinity:+#;-#;0}");
+            GUILayout.Label($"Pontuação de escolha: {score}");
+        }
+
+        GUILayout.Space(8f);
         GUILayout.Label("INVENTÁRIO");
         GUILayout.Label(
             inventory != null && inventory.HasItem

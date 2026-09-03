@@ -72,8 +72,18 @@ public class DuplicantBrain : MonoBehaviour
             {
                 if (TaskManager.Instance != null)
                 {
+                    if (!TaskManager.Instance.TryAcquireTaskSearchSlot())
+                    {
+                        continue;
+                    }
+
                     List<Vector2Int> calculatedPath;
-                    Task availableTask = TaskManager.Instance.GetNextTaskFor(controller.gridPosition, out calculatedPath, controller.capabilityProfile);
+                    Task availableTask = TaskManager.Instance.GetNextTaskFor(
+                        controller.gridPosition,
+                        out calculatedPath,
+                        controller.capabilityProfile,
+                        controller.workProfile
+                    );
 
                     if (availableTask != null)
                     {

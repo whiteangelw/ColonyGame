@@ -10,6 +10,9 @@ public class DuplicantController : MonoBehaviour
     [Header("Referências")]
     public DuplicantCapabilityProfile capabilityProfile;
 
+    [Tooltip("Define afinidades de trabalho. Sem perfil, este duplicant é neutro.")]
+    public DuplicantWorkProfile workProfile;
+
     [Header("Configurações do Colono")]
     public float baseMoveSpeed = 4f;
     public float fallSpeed = 8f;
@@ -27,11 +30,28 @@ public class DuplicantController : MonoBehaviour
 
     private bool isRecovering;
 
+    public int GetWorkAffinity(TaskType taskType)
+    {
+        return workProfile != null
+            ? workProfile.GetAffinity(taskType)
+            : 0;
+    }
+
     private void Awake()
     {
         Movement = GetComponent<DuplicantMovement>();
         TaskRunner = GetComponent<DuplicantTaskRunner>();
         Brain = GetComponent<DuplicantBrain>();
+    }
+
+    private void OnEnable()
+    {
+        ReachabilityManager.Instance?.RegisterDuplicant(this);
+    }
+
+    private void OnDisable()
+    {
+        ReachabilityManager.Instance?.UnregisterDuplicant(this);
     }
 
     private void Start()
