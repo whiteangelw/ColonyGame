@@ -1,0 +1,17 @@
+fileFormatVersion: 2
+guid: 0d3282502a5c29a42a753b6c23666039
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - itemSlotPrefab: {instanceID: 0}
+  - contentParent: {instanceID: 0}
+  - btnFilterAll: {instanceID: 0}
+  - btnFilterBlocks: {instanceID: 0}
+  - btnFilterStorage: {instanceID: 0}
+  - btnFilterMachines: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
