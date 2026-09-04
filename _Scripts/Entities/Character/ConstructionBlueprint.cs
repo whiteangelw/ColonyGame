@@ -51,6 +51,28 @@ public class ConstructionBlueprint : MonoBehaviour
         CheckTaskState();
     }
 
+    public void RestoreProgress(
+        int restoredDeliveredAmount,
+        float restoredWorkDone)
+    {
+        deliveredAmount = Mathf.Clamp(
+            restoredDeliveredAmount,
+            0,
+            requiredAmount
+        );
+        reservedDeliveryAmount = 0;
+        currentWorkDone = Mathf.Clamp(
+            restoredWorkDone,
+            0f,
+            totalWorkRequired
+        );
+        currentTask = null;
+
+        CurrentState = deliveredAmount < requiredAmount
+            ? BlueprintState.WaitingMaterials
+            : BlueprintState.ReadyToBuild;
+    }
+
     public int GetRemainingNeededAmount()
     {
         return Mathf.Max(0, requiredAmount - (deliveredAmount + reservedDeliveryAmount));
@@ -142,6 +164,11 @@ public class ConstructionBlueprint : MonoBehaviour
 
     public void CheckTaskState()
     {
+        if (SaveGameRuntime.IsLoading)
+        {
+            return;
+        }
+
         if (CurrentState == BlueprintState.Completed) return;
 
         if (deliveredAmount < requiredAmount)
@@ -206,7 +233,9 @@ public class ConstructionBlueprint : MonoBehaviour
         BlueprintManager.Instance?.UnregisterBlueprint(this);
 
         bool shouldCleanRuntimeState =
-            Application.isPlaying && !applicationIsQuitting;
+            Application.isPlaying
+            && !applicationIsQuitting
+            && !SaveGameRuntime.IsLoading;
 
         if (shouldCleanRuntimeState
             && CurrentState != BlueprintState.Completed

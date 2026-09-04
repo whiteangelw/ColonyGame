@@ -14,6 +14,7 @@ public class PrintingPodScheduler : MonoBehaviour
     public float TimeRemaining { get; private set; }
     public bool IsOfferReady { get; private set; }
     public bool IsTimerRunning { get; private set; }
+    public bool HasGeneratedFirstOffer => hasGeneratedFirstOffer;
 
     private int lastDisplayedSecond = -1;
     private bool hasGeneratedFirstOffer;
@@ -108,6 +109,25 @@ public class PrintingPodScheduler : MonoBehaviour
         else
         {
             PublishState();
+        }
+    }
+
+    public void RestoreState(
+        float timeRemaining,
+        bool isOfferReady,
+        bool isTimerRunning,
+        bool generatedFirstOffer)
+    {
+        TimeRemaining = Mathf.Max(0f, timeRemaining);
+        IsOfferReady = isOfferReady;
+        IsTimerRunning = isTimerRunning && !isOfferReady;
+        hasGeneratedFirstOffer = generatedFirstOffer;
+        lastDisplayedSecond = -1;
+        PublishState();
+
+        if (IsOfferReady)
+        {
+            GameEvents.TriggerRewardOfferReady();
         }
     }
 

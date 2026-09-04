@@ -37,6 +37,28 @@ public class BlueprintManager : Singleton<BlueprintManager>
         }
     }
 
+    public List<ConstructionBlueprint> GetActiveBlueprints()
+    {
+        activeBlueprints.RemoveAll(blueprint => blueprint == null);
+        return new List<ConstructionBlueprint>(activeBlueprints);
+    }
+
+    public void ClearBlueprintsForLoad()
+    {
+        for (int i = activeBlueprints.Count - 1; i >= 0; i--)
+        {
+            ConstructionBlueprint blueprint = activeBlueprints[i];
+
+            if (blueprint != null)
+            {
+                blueprint.gameObject.SetActive(false);
+                Destroy(blueprint.gameObject);
+            }
+        }
+
+        activeBlueprints.Clear();
+    }
+
     /// <summary>
     /// Cria a entidade Blueprint no mapa, configurando os custos e a carga de trabalho.
     /// </summary>
@@ -88,5 +110,46 @@ public class BlueprintManager : Singleton<BlueprintManager>
         bp.Initialize(gridPos, buildTile, reqResource, cost, workTime);
         activeBlueprints.Add(bp);
         return bp;
+    }
+
+    public ConstructionBlueprint RestoreBlueprint(
+        Vector2Int gridPos,
+        TileType buildTile,
+        ResourceType resource,
+        int requiredAmount,
+        float totalWorkRequired,
+        int deliveredAmount,
+        float currentWorkDone)
+    {
+        if (blueprintPrefab == null || GridManager.Instance == null)
+        {
+            return null;
+        }
+
+        GameObject blueprintObject = Instantiate(
+            blueprintPrefab,
+            GridManager.Instance.GridToWorldPosition(gridPos),
+            Quaternion.identity
+        );
+
+        ConstructionBlueprint blueprint =
+            blueprintObject.GetComponent<ConstructionBlueprint>();
+
+        if (blueprint == null)
+        {
+            Destroy(blueprintObject);
+            return null;
+        }
+
+        blueprint.Initialize(
+            gridPos,
+            buildTile,
+            resource,
+            Mathf.Max(1, requiredAmount),
+            Mathf.Max(0.01f, totalWorkRequired)
+        );
+        blueprint.RestoreProgress(deliveredAmount, currentWorkDone);
+        activeBlueprints.Add(blueprint);
+        return blueprint;
     }
 }

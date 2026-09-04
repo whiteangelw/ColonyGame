@@ -164,6 +164,29 @@ public class TaskManager : MonoBehaviour
         return task != null && pendingTasks.Contains(task);
     }
 
+    public List<Task> GetTasksSnapshot()
+    {
+        return new List<Task>(pendingTasks);
+    }
+
+    public void ClearTasksForLoad()
+    {
+        for (int i = pendingTasks.Count - 1; i >= 0; i--)
+        {
+            Task task = pendingTasks[i];
+            pendingTasks.RemoveAt(i);
+
+            if (task != null)
+            {
+                task.isAssigned = false;
+                OnTaskRemoved?.Invoke(task);
+            }
+        }
+
+        taskCandidateBuffer.Clear();
+        batchCandidateBuffer.Clear();
+    }
+
     public bool TryAcquireTaskSearchSlot()
     {
         if (taskSearchBudgetFrame != Time.frameCount)

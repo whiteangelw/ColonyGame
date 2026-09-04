@@ -148,4 +148,13 @@ public class DuplicantController : MonoBehaviour
         currentState = WorkerState.Idle;
         Brain?.RequestImmediateTaskSearch();
     }
+
+    public void RestoreAt(Vector2Int restoredGridPosition)
+    {
+        currentTask = null;
+        currentState = WorkerState.Idle;
+        gridPosition = restoredGridPosition;
+        Movement?.SnapToGrid(restoredGridPosition);
+        Brain?.RequestImmediateTaskSearch();
+    }
 }

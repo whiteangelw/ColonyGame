@@ -80,6 +80,46 @@ public class StructureManager : Singleton<StructureManager>
         return storages;
     }
 
+    public List<PrintingPod> GetRegisteredPrintingPods()
+    {
+        List<PrintingPod> printingPods = new List<PrintingPod>();
+
+        foreach (PrintingPod printingPod in activePrintingPods.Values)
+        {
+            if (printingPod != null)
+            {
+                printingPods.Add(printingPod);
+            }
+        }
+
+        return printingPods;
+    }
+
+    public void ClearStructuresForLoad()
+    {
+        foreach (StorageStructure storage in activeStorages.Values)
+        {
+            if (storage != null)
+            {
+                storage.gameObject.SetActive(false);
+                Destroy(storage.gameObject);
+            }
+        }
+
+        foreach (PrintingPod printingPod in activePrintingPods.Values)
+        {
+            if (printingPod != null)
+            {
+                printingPod.SetOperational(false);
+                printingPod.gameObject.SetActive(false);
+                Destroy(printingPod.gameObject);
+            }
+        }
+
+        activeStorages.Clear();
+        activePrintingPods.Clear();
+    }
+
     public List<StorageStructure> GetStoragesWithResource(
         ResourceType type)
     {
@@ -301,6 +341,11 @@ public class StructureManager : Singleton<StructureManager>
             if (obj.TryGetComponent<PrintingPod>(out PrintingPod printingPod))
             {
                 RegisterPrintingPod(position, printingPod);
+
+                if (SaveGameRuntime.IsLoading)
+                {
+                    printingPod.SetOperational(true);
+                }
             }
             else
             {

@@ -50,6 +50,16 @@ public class ColonyBootstrap : MonoBehaviour
             return;
         }
 
+        // O save recria os duplicants depois de reconstruir o Grid.
+        // Marca o bootstrap como concluído para não gerar uma segunda colônia.
+        if (SaveGameRuntime.IsLoading
+            || (SaveGameService.Instance != null
+                && SaveGameService.Instance.IsAutomaticLoadInProgress))
+        {
+            initialized = true;
+            return;
+        }
+
         WorldGenerator worldGenerator =
             gridManager.GetComponent<WorldGenerator>();
 

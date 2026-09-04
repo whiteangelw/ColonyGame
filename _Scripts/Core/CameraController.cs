@@ -4,6 +4,10 @@ using System.Collections.Generic;
 
 public class CameraController : MonoBehaviour
 {
+    [Header("Referência")]
+    [Tooltip("Opcional. Se vazio, será usada a Main Camera.")]
+    [SerializeField] private Camera targetCamera;
+
     [Header("Configurações de Movimento")]
     [SerializeField] private float keyboardSpeed = 15f;
 
@@ -21,11 +25,16 @@ public class CameraController : MonoBehaviour
 
     private void Awake()
     {
-        cam = GetComponent<Camera>();
+        TryResolveCamera();
     }
 
     private void Update()
     {
+        if (!TryResolveCamera())
+        {
+            return;
+        }
+
         HandleKeyboardMovement();
         HandleMouseDrag();
         HandleZoom();
@@ -45,7 +54,7 @@ public class CameraController : MonoBehaviour
         }
 
         Vector3 move = new Vector3(input.normalized.x, input.normalized.y, 0) * (keyboardSpeed * Time.deltaTime);
-        transform.position += move;
+        cam.transform.position += move;
     }
 
     private void HandleMouseDrag()
@@ -62,7 +71,7 @@ public class CameraController : MonoBehaviour
         {
             Vector3 currentMouseWorld = cam.ScreenToWorldPoint(Mouse.current.position.ReadValue());
             Vector3 difference = dragOrigin - currentMouseWorld;
-            transform.position += difference;
+            cam.transform.position += difference;
         }
     }
 
@@ -91,16 +100,25 @@ public class CameraController : MonoBehaviour
         float minY = -padding;
         float maxY = mapHeight + padding;
 
-        Vector3 currentPos = transform.position;
+        if (!TryResolveCamera()) return;
+
+        Vector3 currentPos = cam.transform.position;
         currentPos.x = Mathf.Clamp(currentPos.x, minX, maxX);
         currentPos.y = Mathf.Clamp(currentPos.y, minY, maxY);
 
-        transform.position = currentPos;
+        cam.transform.position = currentPos;
     }
 
     public void FocusOnPosition(Vector3 worldPos)
     {
-        transform.position = new Vector3(worldPos.x, worldPos.y, transform.position.z);
+        if (!TryResolveCamera()) return;
+
+        Vector3 currentPosition = cam.transform.position;
+        cam.transform.position = new Vector3(
+            worldPos.x,
+            worldPos.y,
+            currentPosition.z
+        );
         ClampPosition();
     }
 
@@ -131,5 +149,60 @@ public class CameraController : MonoBehaviour
         }
 
         FocusOnPosition(center / validTargets);
+    }
+
+    public float GetZoom()
+    {
+        return TryResolveCamera() ? cam.orthographicSize : minZoom;
+    }
+
+    public Vector3 GetCameraPosition()
+    {
+        return TryResolveCamera()
+            ? cam.transform.position
+            : transform.position;
+    }
+
+    public void RestoreView(Vector3 position, float zoom)
+    {
+        if (!TryResolveCamera()) return;
+
+        cam.transform.position = new Vector3(
+            position.x,
+            position.y,
+            cam.transform.position.z
+        );
+
+        cam.orthographicSize = Mathf.Clamp(zoom, minZoom, maxZoom);
+
+        ClampPosition();
+    }
+
+    private bool TryResolveCamera()
+    {
+        if (cam != null)
+        {
+            return true;
+        }
+
+        cam = targetCamera;
+
+        if (cam == null)
+        {
+            cam = GetComponent<Camera>();
+        }
+
+        if (cam == null)
+        {
+            cam = Camera.main;
+        }
+
+        if (cam != null)
+        {
+            targetCamera = cam;
+            return true;
+        }
+
+        return false;
     }
 }

@@ -53,8 +53,39 @@ public class ItemSpawner : Singleton<ItemSpawner>
         }
 
         itemComponent.Initialize(type, icon, amount);
-        TaskManager.Instance?.AddHaulTask(itemComponent);
         StockpileManager.Instance?.RequestRefresh();
         return true;
+    }
+
+    public ResourceItem RestoreResource(
+        ResourceType type,
+        Vector3 worldPosition,
+        int amount)
+    {
+        if (ItemPoolManager.Instance == null || amount <= 0)
+        {
+            return null;
+        }
+
+        ResourceItem item = ItemPoolManager.Instance.Get(
+            worldPosition,
+            Quaternion.identity
+        );
+
+        if (item == null)
+        {
+            return null;
+        }
+
+        Sprite icon = null;
+
+        if (itemDatabase != null)
+        {
+            ItemDataSO data = itemDatabase.GetItem(type);
+            icon = data != null ? data.icon : null;
+        }
+
+        item.InitializeRestored(type, icon, amount);
+        return item;
     }
 }

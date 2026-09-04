@@ -87,6 +87,36 @@ public class DuplicantSpawnService : MonoBehaviour
         return null;
     }
 
+    public DuplicantController SpawnFromSave(
+        string definitionId,
+        Vector2Int gridPosition)
+    {
+        DuplicantDefinition definition = FindDefinition(definitionId);
+        DuplicantController controller = SpawnDefinition(
+            definition,
+            gridPosition
+        );
+
+        if (controller == null)
+        {
+            return null;
+        }
+
+        DuplicantSaveIdentity identity =
+            controller.GetComponent<DuplicantSaveIdentity>();
+
+        if (identity == null)
+        {
+            identity = controller.gameObject.AddComponent<DuplicantSaveIdentity>();
+        }
+
+        identity.SetDefinitionId(
+            definition != null ? definition.name : definitionId
+        );
+        controller.RestoreAt(gridPosition);
+        return controller;
+    }
+
     private DuplicantController SpawnDefinition(
         DuplicantDefinition definition,
         Vector2Int gridPosition)
@@ -150,7 +180,38 @@ public class DuplicantSpawnService : MonoBehaviour
             }
         }
 
+        DuplicantSaveIdentity identity =
+            instance.GetComponent<DuplicantSaveIdentity>();
+
+        if (identity == null)
+        {
+            identity = instance.AddComponent<DuplicantSaveIdentity>();
+        }
+
+        identity.SetDefinitionId(
+            definition != null ? definition.name : "__fallback__"
+        );
+
         return controller;
+    }
+
+    private DuplicantDefinition FindDefinition(string definitionId)
+    {
+        for (int i = 0; i < definitions.Count; i++)
+        {
+            DuplicantDefinition definition = definitions[i];
+
+            if (definition != null
+                && string.Equals(
+                    definition.name,
+                    definitionId,
+                    System.StringComparison.Ordinal))
+            {
+                return definition;
+            }
+        }
+
+        return null;
     }
 
     private DuplicantDefinition ChooseRandomDefinition()
