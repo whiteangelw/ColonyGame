@@ -133,6 +133,32 @@ public class StorageStructure : MonoBehaviour, IStorage, IDismantlable, IInterac
         return new Dictionary<ResourceType, int>(localInventory);
     }
 
+    public void RestoreStoredItems(
+        IReadOnlyDictionary<ResourceType, int> restoredItems)
+    {
+        InitializeInventory();
+
+        if (restoredItems != null)
+        {
+            foreach (var entry in restoredItems)
+            {
+                localInventory[entry.Key] = Mathf.Clamp(
+                    entry.Value,
+                    0,
+                    maxCapacityPerResource
+                );
+            }
+        }
+
+        IsBeingDismantled = false;
+        GameEvents.TriggerChestUpdated(gridPosition);
+    }
+
+    public void RestoreDismantleState(bool isBeingDismantled)
+    {
+        IsBeingDismantled = isBeingDismantled;
+    }
+
     public void OnInteract()
     {
         if (IsBeingDismantled) return;

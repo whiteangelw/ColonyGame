@@ -25,6 +25,22 @@ public class GridManager : Singleton<GridManager>, IGridService
 
     private void Start()
     {
+        if (SaveGameService.Instance != null
+            && SaveGameService.Instance.TryBeginAutomaticLoad())
+        {
+            return;
+        }
+
+        GenerateGrid();
+    }
+
+    public void GenerateNewWorld()
+    {
+        if (IsGridReady)
+        {
+            return;
+        }
+
         GenerateGrid();
     }
 
@@ -65,9 +81,54 @@ public class GridManager : Singleton<GridManager>, IGridService
         OnGridRebuilt?.Invoke();
     }
 
+    public void BeginSnapshotRestore(int restoredWidth, int restoredHeight)
+    {
+        width = Mathf.Max(1, restoredWidth);
+        height = Mathf.Max(1, restoredHeight);
+        IsGridReady = false;
+        grid = new Tile[width, height];
+
+        for (int x = 0; x < width; x++)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                grid[x, y] = new Tile(x, y, TileType.Empty);
+            }
+        }
+    }
+
+    public void RestoreTileState(
+        int x,
+        int y,
+        TileType type,
+        FogState fogState,
+        float liquidAmount)
+    {
+        Tile tile = GetTile(x, y);
+
+        if (tile == null)
+        {
+            return;
+        }
+
+        tile.type = type;
+        tile.isPassable = !IsSolidTileType(type);
+        tile.fogState = fogState;
+        tile.liquidAmount = Mathf.Max(0f, liquidAmount);
+        tile.reachabilityGroupID = -1;
+    }
+
+    public void CompleteSnapshotRestore()
+    {
+        IsGridReady = true;
+        OnGridRebuilt?.Invoke();
+    }
+
     public Tile GetTile(int x, int y)
     {
-        if (!IsInsideGrid(x, y))
+        // Durante o menu inicial o mundo ainda não foi criado.
+        // Consultas antecipadas devem apenas informar que não existe tile.
+        if (grid == null || !IsInsideGrid(x, y))
         {
             return null;
         }
@@ -98,7 +159,10 @@ public class GridManager : Singleton<GridManager>, IGridService
             return;
         }
 
-        if (tile.type == newType && newType != TileType.Chest)
+        bool createsStructure = newType == TileType.Chest
+            || newType == TileType.PrintingPod;
+
+        if (tile.type == newType && !createsStructure)
         {
             return;
         }
@@ -114,7 +178,7 @@ public class GridManager : Singleton<GridManager>, IGridService
         tile.type = newType;
         tile.isPassable = !isSolid;
 
-        if (newType == TileType.Chest)
+        if (createsStructure)
         {
             StructureManager.Instance?.SpawnStructure(
                 new Vector2Int(x, y),
@@ -267,6 +331,7 @@ public class GridManager : Singleton<GridManager>, IGridService
     {
         return type != TileType.Empty
             && type != TileType.Ladder
-            && type != TileType.Chest;
+            && type != TileType.Chest
+            && type != TileType.PrintingPod;
     }
 }

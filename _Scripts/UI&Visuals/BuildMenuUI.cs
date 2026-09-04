@@ -45,12 +45,14 @@ public class BuildMenuUI : MonoBehaviour
     {
         GameEvents.OnToggleBuildMenuRequested += HandleToggleMenuRequested;
         GameEvents.OnResourceUnlocked += OnNewResourceUnlocked;
+        GameEvents.OnRecipeUnlocked += OnRecipeUnlocked;
     }
 
     private void OnDisable()
     {
         GameEvents.OnToggleBuildMenuRequested -= HandleToggleMenuRequested;
         GameEvents.OnResourceUnlocked -= OnNewResourceUnlocked;
+        GameEvents.OnRecipeUnlocked -= OnRecipeUnlocked;
     }
 
     private void HandleToggleMenuRequested(bool shouldOpen)
@@ -66,6 +68,11 @@ public class BuildMenuUI : MonoBehaviour
     }
 
     private void OnNewResourceUnlocked(ResourceType unlockedType)
+    {
+        RefreshMenu();
+    }
+
+    private void OnRecipeUnlocked(TileType tileType)
     {
         RefreshMenu();
     }
@@ -87,6 +94,12 @@ public class BuildMenuUI : MonoBehaviour
 
         foreach (var recipe in buildRecipes)
         {
+            if (RecipeUnlockService.Instance != null
+                && !RecipeUnlockService.Instance.IsUnlocked(recipe.tileType))
+            {
+                continue;
+            }
+
             ResourceType reqResource = BuildingCosts.GetRequiredResource(recipe.tileType);
 
             bool isUnlocked = StockpileManager.Instance != null && StockpileManager.Instance.HasUnlockedResource(reqResource);

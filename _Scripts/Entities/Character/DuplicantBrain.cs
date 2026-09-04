@@ -8,20 +8,28 @@ public class DuplicantBrain : MonoBehaviour
     private DuplicantController controller;
     private DuplicantMovement movement;
     private DuplicantTaskRunner taskRunner;
+    private DuplicantVitals vitals;
 
     private float searchCooldown = 0f;
     private Coroutine brainCoroutine;
     private Coroutine activeTaskCoroutine;
+    private Coroutine emergencyRestCoroutine;
 
     private void Awake()
     {
         controller = GetComponent<DuplicantController>();
         movement = GetComponent<DuplicantMovement>();
         taskRunner = GetComponent<DuplicantTaskRunner>();
+        vitals = GetComponent<DuplicantVitals>();
     }
 
     private void OnEnable()
     {
+        if (vitals != null)
+        {
+            vitals.OnEmergencyRestRequested += HandleEmergencyRestRequested;
+        }
+
         if (brainCoroutine == null)
         {
             brainCoroutine = StartCoroutine(WorkerBrainRoutine());
@@ -30,6 +38,18 @@ public class DuplicantBrain : MonoBehaviour
 
     private void OnDisable()
     {
+        if (vitals != null)
+        {
+            vitals.OnEmergencyRestRequested -= HandleEmergencyRestRequested;
+        }
+
+        if (emergencyRestCoroutine != null)
+        {
+            StopCoroutine(emergencyRestCoroutine);
+            emergencyRestCoroutine = null;
+            vitals?.CancelEmergencyRest();
+        }
+
         if (activeTaskCoroutine != null)
         {
             StopCoroutine(activeTaskCoroutine);
@@ -136,5 +156,45 @@ public class DuplicantBrain : MonoBehaviour
     public void RequestImmediateTaskSearch()
     {
         searchCooldown = 0f;
+    }
+
+    private void HandleEmergencyRestRequested(DuplicantVitals source)
+    {
+        if (emergencyRestCoroutine != null || !isActiveAndEnabled)
+        {
+            return;
+        }
+
+        controller.CancelCurrentTaskExecution();
+        emergencyRestCoroutine = StartCoroutine(EmergencyRestRoutine());
+    }
+
+    private IEnumerator EmergencyRestRoutine()
+    {
+        vitals.BeginEmergencyRest();
+        controller.currentState = DuplicantController.WorkerState.Resting;
+
+        GameEvents.TriggerFloatingTextRequested(
+            "Soneca de emergência",
+            controller.transform.position,
+            Color.cyan
+        );
+
+        LifeCycleSettingsSO settings = LifeCycleSystem.Instance != null
+            ? LifeCycleSystem.Instance.Settings
+            : null;
+        float duration = settings != null
+            ? settings.emergencyNapDuration
+            : 5f;
+        float recovery = settings != null
+            ? settings.emergencyNapRecoveryPercent
+            : 0.20f;
+
+        yield return new WaitForSeconds(duration);
+
+        vitals.CompleteEmergencyRest(recovery);
+        controller.currentState = DuplicantController.WorkerState.Idle;
+        emergencyRestCoroutine = null;
+        RequestImmediateTaskSearch();
     }
 }

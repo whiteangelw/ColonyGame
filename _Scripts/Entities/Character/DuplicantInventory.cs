@@ -96,4 +96,14 @@ public class DuplicantInventory : MonoBehaviour
         Clear();
         return true;
     }
+
+    public void Restore(ResourceType? type, int amount)
+    {
+        CarriedType = amount > 0 ? type : null;
+        CarriedAmount = CarriedType.HasValue
+            ? Mathf.Max(0, amount)
+            : 0;
+
+        StockpileManager.Instance?.RequestRefresh();
+    }
 }

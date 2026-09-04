@@ -7,6 +7,7 @@ public class ResourceItem : MonoBehaviour
     public int amount = 1;
 
     private Rigidbody2D rb;
+    private BoxCollider2D itemCollider;
     private SpriteRenderer spriteRenderer;
     private GridManager gridManager;
     private bool hasQueuedAfterSettling;
@@ -24,12 +25,17 @@ public class ResourceItem : MonoBehaviour
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
+        itemCollider = GetComponent<BoxCollider2D>();
         spriteRenderer = GetComponent<SpriteRenderer>();
 
         rb.gravityScale = 1.5f;
         rb.freezeRotation = true;
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
         rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+
+        // A queda e o apoio são resolvidos pelo Grid.
+        // O trigger impede itens de formarem pilhas suspensas entre si.
+        itemCollider.isTrigger = true;
 
         previousPhysicsPosition = transform.position;
     }
@@ -55,6 +61,11 @@ public class ResourceItem : MonoBehaviour
             rb.angularVelocity = 0f;
         }
 
+        if (itemCollider != null)
+        {
+            itemCollider.isTrigger = true;
+        }
+
         if (icon != null && spriteRenderer != null)
         {
             spriteRenderer.sprite = icon;
@@ -63,6 +74,31 @@ public class ResourceItem : MonoBehaviour
         // Reduzida a força do impulso para evitar atravessar a física do tilemap
         Vector2 force = new Vector2(Random.Range(-0.5f, 0.5f), Random.Range(0.8f, 1.8f));
         rb.AddForce(force, ForceMode2D.Impulse);
+    }
+
+    public void InitializeRestored(
+        ResourceType resourceType,
+        Sprite icon,
+        int count)
+    {
+        type = resourceType;
+        amount = Mathf.Max(1, count);
+        hasQueuedAfterSettling = true;
+        reservedBy = null;
+        nextGroundCheckTime = Time.time + GroundCheckInterval;
+        previousPhysicsPosition = transform.position;
+
+        if (icon != null && spriteRenderer != null)
+        {
+            spriteRenderer.sprite = icon;
+        }
+
+        if (rb != null)
+        {
+            rb.linearVelocity = Vector2.zero;
+            rb.angularVelocity = 0f;
+            rb.bodyType = RigidbodyType2D.Kinematic;
+        }
     }
 
     public bool TryTake(int requestedAmount, out int takenAmount)

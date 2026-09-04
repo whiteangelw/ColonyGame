@@ -21,6 +21,7 @@ public class DevModeManager : Singleton<DevModeManager>
 
     [Header("Referências")]
     public GameObject duplicantPrefab;
+    [SerializeField] private DuplicantSpawnService duplicantSpawnService;
 
     private DuplicantController selectedDuplicant;
     private BoxSelectionHandler selectionHandler;
@@ -214,13 +215,21 @@ public class DevModeManager : Singleton<DevModeManager>
                 break;
 
             case DevTool.SpawnDuplicant:
-                if (isFirstClick && duplicantPrefab != null)
+                if (isFirstClick)
                 {
-                    Instantiate(
-                        duplicantPrefab,
-                        worldPosition,
-                        Quaternion.identity
-                    );
+                    DuplicantSpawnService spawnService =
+                        GetDuplicantSpawnService();
+
+                    if (spawnService != null)
+                    {
+                        spawnService.SpawnRandomGroup(gridPosition, 1);
+                    }
+                    else
+                    {
+                        Debug.LogError(
+                            "[DevMode] DuplicantSpawnService não encontrado."
+                        );
+                    }
                 }
                 break;
 
@@ -233,6 +242,17 @@ public class DevModeManager : Singleton<DevModeManager>
                 }
                 break;
         }
+    }
+
+    private DuplicantSpawnService GetDuplicantSpawnService()
+    {
+        if (duplicantSpawnService == null)
+        {
+            duplicantSpawnService =
+                FindFirstObjectByType<DuplicantSpawnService>();
+        }
+
+        return duplicantSpawnService;
     }
 
     private void SelectDuplicantAt(Vector3 worldPosition)
@@ -342,6 +362,8 @@ public class DevModeManager : Singleton<DevModeManager>
         DuplicantTaskRunner runner = selectedDuplicant.TaskRunner;
         DuplicantInventory inventory =
             selectedDuplicant.GetComponent<DuplicantInventory>();
+        DuplicantVitals vitals =
+            selectedDuplicant.GetComponent<DuplicantVitals>();
         Task task = selectedDuplicant.currentTask;
 
         GUILayout.Label($"Nome: {selectedDuplicant.name}");
@@ -391,6 +413,46 @@ public class DevModeManager : Singleton<DevModeManager>
                 ? $"Carregando: {inventory.CarriedAmount}x {inventory.CarriedType}"
                 : "Carregando: nada"
         );
+
+        GUILayout.Space(8f);
+        GUILayout.Label("NECESSIDADES");
+
+        if (vitals != null)
+        {
+            GUILayout.Label(
+                $"Energia: {vitals.CurrentEnergy:F1}/{vitals.MaximumEnergy:F1} ({vitals.EnergyPercent:P0})"
+            );
+            GUILayout.Label(
+                $"Fome: {vitals.CurrentHunger:F1}/{vitals.MaximumHunger:F1} ({vitals.HungerPercent:P0})"
+            );
+            GUILayout.Label($"Estado: {vitals.CurrentNeedState}");
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Zerar energia"))
+            {
+                vitals.SetEnergyPercent(0f);
+            }
+            if (GUILayout.Button("Energia 100%"))
+            {
+                vitals.SetEnergyPercent(1f);
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Zerar fome"))
+            {
+                vitals.SetHungerPercent(0f);
+            }
+            if (GUILayout.Button("Fome 100%"))
+            {
+                vitals.SetHungerPercent(1f);
+            }
+            GUILayout.EndHorizontal();
+        }
+        else
+        {
+            GUILayout.Label("DuplicantVitals não encontrado.");
+        }
 
         if (runner != null)
         {

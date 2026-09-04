@@ -35,6 +35,8 @@ public class WorldGenerator : MonoBehaviour
 
     private Vector2Int spawnCenter;
 
+    public float CurrentSeed => seed;
+
     private void Awake()
     {
         if (gridManager == null)

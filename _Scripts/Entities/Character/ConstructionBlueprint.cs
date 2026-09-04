@@ -51,6 +51,28 @@ public class ConstructionBlueprint : MonoBehaviour
         CheckTaskState();
     }
 
+    public void RestoreProgress(
+        int restoredDeliveredAmount,
+        float restoredWorkDone)
+    {
+        deliveredAmount = Mathf.Clamp(
+            restoredDeliveredAmount,
+            0,
+            requiredAmount
+        );
+        reservedDeliveryAmount = 0;
+        currentWorkDone = Mathf.Clamp(
+            restoredWorkDone,
+            0f,
+            totalWorkRequired
+        );
+        currentTask = null;
+
+        CurrentState = deliveredAmount < requiredAmount
+            ? BlueprintState.WaitingMaterials
+            : BlueprintState.ReadyToBuild;
+    }
+
     public int GetRemainingNeededAmount()
     {
         return Mathf.Max(0, requiredAmount - (deliveredAmount + reservedDeliveryAmount));
@@ -142,6 +164,11 @@ public class ConstructionBlueprint : MonoBehaviour
 
     public void CheckTaskState()
     {
+        if (SaveGameRuntime.IsLoading)
+        {
+            return;
+        }
+
         if (CurrentState == BlueprintState.Completed) return;
 
         if (deliveredAmount < requiredAmount)
@@ -203,7 +230,14 @@ public class ConstructionBlueprint : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (!applicationIsQuitting
+        BlueprintManager.Instance?.UnregisterBlueprint(this);
+
+        bool shouldCleanRuntimeState =
+            Application.isPlaying
+            && !applicationIsQuitting
+            && !SaveGameRuntime.IsLoading;
+
+        if (shouldCleanRuntimeState
             && CurrentState != BlueprintState.Completed
             && deliveredAmount > 0)
         {
@@ -229,7 +263,9 @@ public class ConstructionBlueprint : MonoBehaviour
             StockpileManager.Instance?.RequestRefresh();
         }
 
-        if (CurrentState != BlueprintState.Completed && currentTask != null)
+        if (shouldCleanRuntimeState
+            && CurrentState != BlueprintState.Completed
+            && currentTask != null)
         {
             TaskManager.Instance?.RemoveTask(currentTask);
         }

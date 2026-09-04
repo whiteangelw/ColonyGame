@@ -14,6 +14,8 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
     private readonly Dictionary<ReachabilityCacheKey, HashSet<Vector2Int>>
         reachablePositionsCache =
             new Dictionary<ReachabilityCacheKey, HashSet<Vector2Int>>();
+    private readonly HashSet<DuplicantController> registeredDuplicants =
+        new HashSet<DuplicantController>();
     public bool IsReady { get; private set; }
     private GridManager subscribedGridManager;
     private bool recalculationPending;
@@ -22,6 +24,7 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
     private void Start()
     {
         navGraph = NavGraphGenerator.Instance;
+        RegisterExistingDuplicants();
         subscribedGridManager = GridManager.Instance;
         if (subscribedGridManager != null)
         {
@@ -89,13 +92,7 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
             return false;
         }
 
-        DuplicantController[] duplicants =
-            UnityEngine.Object.FindObjectsByType<DuplicantController>(
-                FindObjectsInactive.Exclude,
-                FindObjectsSortMode.None
-            );
-
-        foreach (DuplicantController duplicant in duplicants)
+        foreach (DuplicantController duplicant in registeredDuplicants)
         {
             if (duplicant != null
                 && CanReach(
@@ -109,6 +106,36 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
         }
 
         return false;
+    }
+
+    public void RegisterDuplicant(DuplicantController duplicant)
+    {
+        if (duplicant != null)
+        {
+            registeredDuplicants.Add(duplicant);
+        }
+    }
+
+    public void UnregisterDuplicant(DuplicantController duplicant)
+    {
+        if (!ReferenceEquals(duplicant, null))
+        {
+            registeredDuplicants.Remove(duplicant);
+        }
+    }
+
+    private void RegisterExistingDuplicants()
+    {
+        DuplicantController[] duplicants =
+            UnityEngine.Object.FindObjectsByType<DuplicantController>(
+                FindObjectsInactive.Exclude,
+                FindObjectsSortMode.None
+            );
+
+        foreach (DuplicantController duplicant in duplicants)
+        {
+            RegisterDuplicant(duplicant);
+        }
     }
 
     public bool CanReachExact(

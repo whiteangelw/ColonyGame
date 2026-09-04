@@ -28,6 +28,11 @@ public class DayNightCycleManager : MonoBehaviour
 
     private void Update()
     {
+        if (SaveGameRuntime.IsLoading)
+        {
+            return;
+        }
+
         AdvanceTime();
         CheckTimeState();
         NotifyTimeUpdate();
@@ -73,5 +78,29 @@ public class DayNightCycleManager : MonoBehaviour
         string periodName = currentTimeState.ToString();
 
         GameEvents.TriggerTimeUpdated(currentDay, timeString, periodName);
+    }
+
+    public DayNightCycleSaveData CaptureState()
+    {
+        return new DayNightCycleSaveData
+        {
+            hasState = true,
+            currentDay = Mathf.Max(1, currentDay),
+            currentTimeRatio = Mathf.Repeat(currentTimeRatio, 1f)
+        };
+    }
+
+    public void RestoreState(DayNightCycleSaveData savedState)
+    {
+        if (savedState == null || !savedState.hasState)
+        {
+            NotifyTimeUpdate();
+            return;
+        }
+
+        currentDay = Mathf.Max(1, savedState.currentDay);
+        currentTimeRatio = Mathf.Repeat(savedState.currentTimeRatio, 1f);
+        CheckTimeState();
+        NotifyTimeUpdate();
     }
 }

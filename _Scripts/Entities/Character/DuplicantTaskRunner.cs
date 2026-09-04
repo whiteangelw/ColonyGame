@@ -61,7 +61,8 @@ public class DuplicantTaskRunner : MonoBehaviour
 
     private void OnDisable()
     {
-        if (!applicationIsQuitting
+        if (!SaveGameRuntime.IsLoading
+            && !applicationIsQuitting
             && !isFinalizingTask
             && (activeTask != null || controller.currentTask != null))
         {

@@ -60,6 +60,16 @@ public class StockpileManager : MonoBehaviour
         refreshPending = true;
     }
 
+    public void ResetRuntimeReservationsForLoad()
+    {
+        foreach (ResourceType type in Enum.GetValues(typeof(ResourceType)))
+        {
+            reservedResources[type] = 0;
+        }
+
+        refreshPending = false;
+    }
+
     /// <summary>
     /// Recalcula o total usando somente recursos físicos alcançáveis.
     /// Mover um item entre chão, inventário e baú não muda o total.

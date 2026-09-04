@@ -152,14 +152,17 @@ public class BoxSelectionHandler : MonoBehaviour
                 if (playerInput.currentMode == InputMode.Dig)
                 {
                     if (tile.type != TileType.Empty && tile.type != TileType.Bedrock &&
-                        tile.type != TileType.Chest && tile.type != TileType.Ladder)
+                        tile.type != TileType.Chest && tile.type != TileType.Ladder &&
+                        tile.type != TileType.PrintingPod)
                     {
                         TaskManager.Instance?.AddTask(new Vector2Int(x, y), TaskType.Dig);
                     }
                 }
                 else if (playerInput.currentMode == InputMode.Dismantle)
                 {
-                    if (tile.type == TileType.Chest || tile.type == TileType.Ladder)
+                    if (tile.type == TileType.Chest
+                        || tile.type == TileType.Ladder
+                        || tile.type == TileType.PrintingPod)
                     {
                         WorldInteractionService.Instance?.DismantleTile(x, y);
                     }
@@ -171,6 +174,13 @@ public class BoxSelectionHandler : MonoBehaviour
     private void ProcessBuildSelection(int minX, int maxX, int minY, int maxY)
     {
         TileType buildTile = playerInput.selectedBuildTile;
+
+        if (buildTile == TileType.PrintingPod)
+        {
+            ProcessSingleMachineSelection(minX, maxX, minY, maxY);
+            return;
+        }
+
         ResourceType reqResource = BuildingCosts.GetRequiredResource(buildTile);
         int costPerTile = BuildingCosts.GetCost(buildTile);
 
@@ -215,6 +225,128 @@ public class BoxSelectionHandler : MonoBehaviour
                 }
             }
         }
+    }
+
+    private void ProcessSingleMachineSelection(
+        int minX,
+        int maxX,
+        int minY,
+        int maxY)
+    {
+        if (BlueprintManager.Instance == null)
+        {
+            ShowMachinePlacementMessage(
+                "BlueprintManager não encontrado.",
+                minX,
+                maxX,
+                minY,
+                maxY
+            );
+            return;
+        }
+
+        if (!BlueprintManager.Instance.CanCreateBlueprint(
+                TileType.PrintingPod))
+        {
+            ShowMachinePlacementMessage(
+                "Já existe um Printing Pod ou um projeto dele.",
+                minX,
+                maxX,
+                minY,
+                maxY
+            );
+            return;
+        }
+
+        ResourceType resource = BuildingCosts.GetRequiredResource(
+            TileType.PrintingPod
+        );
+        int cost = BuildingCosts.GetCost(TileType.PrintingPod);
+
+        if (StockpileManager.Instance != null
+            && !StockpileManager.Instance.HasResource(resource, cost))
+        {
+            ShowMachinePlacementMessage(
+                $"Sem recursos suficientes! Necessário: {cost} {resource}.",
+                minX,
+                maxX,
+                minY,
+                maxY
+            );
+            return;
+        }
+
+        for (int x = minX; x <= maxX; x++)
+        {
+            for (int y = minY; y <= maxY; y++)
+            {
+                Vector2Int position = new Vector2Int(x, y);
+                Tile tile = GridManager.Instance.GetTile(position);
+
+                if (tile == null
+                    || tile.type != TileType.Empty
+                    || TaskManager.Instance?.GetTaskAt(position) != null)
+                {
+                    continue;
+                }
+
+                ConstructionBlueprint blueprint =
+                    BlueprintManager.Instance.CreateBlueprint(
+                    position,
+                    TileType.PrintingPod
+                );
+
+                if (blueprint == null)
+                {
+                    ShowMachinePlacementMessage(
+                        "Falha ao criar o blueprint. Verifique o Console.",
+                        minX,
+                        maxX,
+                        minY,
+                        maxY
+                    );
+                }
+
+                return;
+            }
+        }
+
+        ShowMachinePlacementMessage(
+            "Escolha uma célula vazia e sem outra tarefa.",
+            minX,
+            maxX,
+            minY,
+            maxY
+        );
+    }
+
+    private void ShowMachinePlacementMessage(
+        string message,
+        int minX,
+        int maxX,
+        int minY,
+        int maxY)
+    {
+        if (GridManager.Instance == null)
+        {
+            Debug.LogWarning(message);
+            return;
+        }
+
+        float cellSize = GridManager.Instance.cellSize;
+        Vector3 centerPosition = new Vector3(
+            (minX + maxX + 1) * cellSize * 0.5f,
+            (minY + maxY + 1) * cellSize * 0.5f,
+            0f
+        );
+
+        GameEvents.TriggerFloatingTextRequested(
+            message,
+            centerPosition,
+            Color.red
+        );
+
+        Debug.LogWarning("[Build] " + message);
     }
 
     private void GetGridBounds(out int minX, out int maxX, out int minY, out int maxY)
