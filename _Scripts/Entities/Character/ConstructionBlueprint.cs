@@ -203,7 +203,12 @@ public class ConstructionBlueprint : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (!applicationIsQuitting
+        BlueprintManager.Instance?.UnregisterBlueprint(this);
+
+        bool shouldCleanRuntimeState =
+            Application.isPlaying && !applicationIsQuitting;
+
+        if (shouldCleanRuntimeState
             && CurrentState != BlueprintState.Completed
             && deliveredAmount > 0)
         {
@@ -229,7 +234,9 @@ public class ConstructionBlueprint : MonoBehaviour
             StockpileManager.Instance?.RequestRefresh();
         }
 
-        if (CurrentState != BlueprintState.Completed && currentTask != null)
+        if (shouldCleanRuntimeState
+            && CurrentState != BlueprintState.Completed
+            && currentTask != null)
         {
             TaskManager.Instance?.RemoveTask(currentTask);
         }

@@ -1,26 +1,32 @@
-using System.Collections;
 using UnityEngine;
 
-public class PrintingPod : MonoBehaviour
+public class PrintingPod : MonoBehaviour, IDismantlable
 {
     public static PrintingPod Instance { get; private set; }
 
-    [Header("Configurações do Spawn")]
-    [SerializeField] private GameObject duplicantPrefab;
-    [SerializeField] private float cooldownTime = 10f;
-    [SerializeField] private int maxPrintsAllowed = 5; // Limita o número máximo de cargas salvas na RAM
-
     [Header("Estado")]
-    public float timeRemaining;
-    public int availablePrints = 0;
+    [SerializeField] private bool isOperational;
+
+    public bool IsOperational => isOperational;
+    public Vector2Int GridPosition => gridPosition;
 
     public Vector2Int gridPosition;
     private GridManager gridManager;
 
     private void Awake()
     {
-        if (Instance == null) Instance = this;
-        else Destroy(gameObject);
+        if (Instance == null)
+        {
+            Instance = this;
+        }
+        else
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        // O prefab nunca nasce ativo antes de entrar no mundo construído.
+        isOperational = false;
     }
 
     private void Start()
@@ -28,8 +34,21 @@ public class PrintingPod : MonoBehaviour
         gridManager = GridManager.Instance != null ? GridManager.Instance : FindFirstObjectByType<GridManager>();
         UpdateGridPosition();
 
-        timeRemaining = cooldownTime;
-        StartCoroutine(CooldownRoutine());
+        SetOperational(true);
+    }
+
+    private void OnDestroy()
+    {
+        if (Instance == this)
+        {
+            Instance = null;
+        }
+
+        if (isOperational)
+        {
+            isOperational = false;
+            GameEvents.TriggerPrintingPodRemoved(this);
+        }
     }
 
     public void UpdateGridPosition()
@@ -41,54 +60,36 @@ public class PrintingPod : MonoBehaviour
         }
     }
 
-    private IEnumerator CooldownRoutine()
+    public void SetOperational(bool operational)
     {
-        WaitForSeconds waitFrame = new WaitForSeconds(0.1f);
-
-        while (true)
+        if (isOperational == operational)
         {
-            if (availablePrints >= maxPrintsAllowed)
-            {
-                // Para de rodar a contagem caso o limite de cargas na RAM tenha sido atingido
-                yield return waitFrame;
-                continue;
-            }
+            return;
+        }
 
-            timeRemaining = cooldownTime;
+        isOperational = operational;
 
-            while (timeRemaining > 0)
-            {
-                timeRemaining -= Time.deltaTime;
-                yield return null;
-            }
-
-            timeRemaining = 0;
-            availablePrints++;
+        if (isOperational)
+        {
+            UpdateGridPosition();
+            GameEvents.TriggerPrintingPodBuilt(this);
+        }
+        else
+        {
+            GameEvents.TriggerPrintingPodRemoved(this);
         }
     }
 
-    public void PrintDuplicant()
+    public void SetGridPosition(Vector2Int position)
     {
-        if (availablePrints <= 0) return;
-        if (duplicantPrefab == null) return;
+        gridPosition = position;
+    }
 
-        if (gridManager == null) UpdateGridPosition();
-
-        Vector3 spawnPos = transform.position;
-        if (gridManager != null)
-        {
-            spawnPos = new Vector3(
-                gridPosition.x * gridManager.cellSize + gridManager.cellSize / 2f,
-                gridPosition.y * gridManager.cellSize + gridManager.cellSize / 2f,
-                0f
-            );
-        }
-
-        GameObject newDuplicant = Instantiate(duplicantPrefab, spawnPos, Quaternion.identity);
-
-        if (newDuplicant != null)
-        {
-            availablePrints--;
-        }
+    public void Dismantle()
+    {
+        WorldInteractionService.Instance?.DismantleTile(
+            gridPosition.x,
+            gridPosition.y
+        );
     }
 }

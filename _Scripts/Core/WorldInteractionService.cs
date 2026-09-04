@@ -8,7 +8,9 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
 
         Tile tile = GridManager.Instance.GetTile(x, y);
         if (tile == null || tile.type == TileType.Empty || tile.type == TileType.Bedrock) return;
-        if (tile.type == TileType.Chest || tile.type == TileType.Ladder) return;
+        if (tile.type == TileType.Chest
+            || tile.type == TileType.Ladder
+            || tile.type == TileType.PrintingPod) return;
 
         ResourceType? droppedResource = GetResourceTypeFromTile(tile.type);
 
@@ -35,7 +37,9 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
         Tile tile = GridManager.Instance.GetTile(x, y);
         if (tile == null || tile.type == TileType.Empty) return;
 
-        if (tile.type == TileType.Chest || tile.type == TileType.Ladder)
+        if (tile.type == TileType.Chest
+            || tile.type == TileType.Ladder
+            || tile.type == TileType.PrintingPod)
         {
             Vector2Int position = new Vector2Int(x, y);
 
@@ -73,6 +77,12 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
         if (tile.type == TileType.Chest)
         {
             StructureManager.Instance?.DismantleStructureAt(new Vector2Int(x, y));
+        }
+        else if (tile.type == TileType.PrintingPod)
+        {
+            StructureManager.Instance?.DismantleStructureAt(
+                new Vector2Int(x, y)
+            );
         }
         else if (tile.type == TileType.Ladder)
         {

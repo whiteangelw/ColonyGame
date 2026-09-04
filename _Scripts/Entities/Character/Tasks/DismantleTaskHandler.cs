@@ -17,7 +17,8 @@ public class DismantleTaskHandler : ITaskHandler
 
         return tile != null
             && (tile.type == TileType.Chest
-                || tile.type == TileType.Ladder);
+                || tile.type == TileType.Ladder
+                || tile.type == TileType.PrintingPod);
     }
 
     public void StartTask(DuplicantController dupe, Task task, System.Action onComplete)
