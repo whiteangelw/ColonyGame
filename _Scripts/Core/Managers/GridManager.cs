@@ -98,7 +98,10 @@ public class GridManager : Singleton<GridManager>, IGridService
             return;
         }
 
-        if (tile.type == newType && newType != TileType.Chest)
+        bool createsStructure = newType == TileType.Chest
+            || newType == TileType.PrintingPod;
+
+        if (tile.type == newType && !createsStructure)
         {
             return;
         }
@@ -114,7 +117,7 @@ public class GridManager : Singleton<GridManager>, IGridService
         tile.type = newType;
         tile.isPassable = !isSolid;
 
-        if (newType == TileType.Chest)
+        if (createsStructure)
         {
             StructureManager.Instance?.SpawnStructure(
                 new Vector2Int(x, y),
@@ -267,6 +270,7 @@ public class GridManager : Singleton<GridManager>, IGridService
     {
         return type != TileType.Empty
             && type != TileType.Ladder
-            && type != TileType.Chest;
+            && type != TileType.Chest
+            && type != TileType.PrintingPod;
     }
 }

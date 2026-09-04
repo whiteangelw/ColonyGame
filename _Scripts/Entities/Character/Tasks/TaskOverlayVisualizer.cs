@@ -17,30 +17,48 @@ public class TaskOverlayVisualizer : MonoBehaviour
     // Pool de objetos para reutilizar os textos de prioridade sem travar a memória
     private Dictionary<Vector2Int, GameObject> activePriorityTexts = new Dictionary<Vector2Int, GameObject>();
     private Queue<GameObject> textPool = new Queue<GameObject>();
+    private TaskManager subscribedTaskManager;
+    private bool isShuttingDown;
+
+    private void Awake()
+    {
+        TryResolveTilemap();
+    }
+
+    private void OnEnable()
+    {
+        isShuttingDown = false;
+        TrySubscribeToTaskManager();
+    }
 
     private void Start()
     {
-        if (overlayTilemap == null)
-            overlayTilemap = GetComponent<Tilemap>();
+        TryResolveTilemap();
+        TrySubscribeToTaskManager();
+    }
 
-        if (TaskManager.Instance != null)
-        {
-            TaskManager.Instance.OnTaskAdded += OnTaskAddedHandler;
-            TaskManager.Instance.OnTaskRemoved += OnTaskRemovedHandler;
-        }
+    private void OnDisable()
+    {
+        isShuttingDown = true;
+        UnsubscribeFromTaskManager();
     }
 
     private void OnDestroy()
     {
-        if (TaskManager.Instance != null)
-        {
-            TaskManager.Instance.OnTaskAdded -= OnTaskAddedHandler;
-            TaskManager.Instance.OnTaskRemoved -= OnTaskRemovedHandler;
-        }
+        isShuttingDown = true;
+        UnsubscribeFromTaskManager();
+    }
+
+    private void OnApplicationQuit()
+    {
+        isShuttingDown = true;
+        UnsubscribeFromTaskManager();
     }
 
     private void OnTaskAddedHandler(Task task)
     {
+        if (task == null || !CanUpdateOverlay()) return;
+
         Vector3Int tilePosition = new Vector3Int(task.gridPosition.x, task.gridPosition.y, 0);
 
         // 1. Desenha o Tile de Overlay diretamente no Tilemap (Batching nativo)
@@ -76,6 +94,8 @@ public class TaskOverlayVisualizer : MonoBehaviour
 
     private void OnTaskRemovedHandler(Task task)
     {
+        if (task == null || !CanUpdateOverlay()) return;
+
         Vector3Int tilePosition = new Vector3Int(task.gridPosition.x, task.gridPosition.y, 0);
 
         // Remove o Tile do Overlay
@@ -84,8 +104,12 @@ public class TaskOverlayVisualizer : MonoBehaviour
         // Devolve o Texto para a Pool em vez de destruí-lo
         if (activePriorityTexts.TryGetValue(task.gridPosition, out GameObject textObj))
         {
-            textObj.SetActive(false);
-            textPool.Enqueue(textObj);
+            if (textObj != null)
+            {
+                textObj.SetActive(false);
+                textPool.Enqueue(textObj);
+            }
+
             activePriorityTexts.Remove(task.gridPosition);
         }
     }
@@ -108,6 +132,8 @@ public class TaskOverlayVisualizer : MonoBehaviour
 
     public void UpdateTaskPriorityText(Vector2Int gridPos, int newPriority)
     {
+        if (isShuttingDown) return;
+
         if (activePriorityTexts.TryGetValue(gridPos, out GameObject textObj))
         {
             TMP_Text textMesh = textObj.GetComponent<TMP_Text>();
@@ -116,5 +142,46 @@ public class TaskOverlayVisualizer : MonoBehaviour
                 textMesh.text = newPriority.ToString();
             }
         }
+    }
+
+    private bool CanUpdateOverlay()
+    {
+        return !isShuttingDown
+            && Application.isPlaying
+            && TryResolveTilemap();
+    }
+
+    private bool TryResolveTilemap()
+    {
+        if (overlayTilemap != null) return true;
+
+        overlayTilemap = GetComponent<Tilemap>();
+        return overlayTilemap != null;
+    }
+
+    private void TrySubscribeToTaskManager()
+    {
+        if (isShuttingDown || subscribedTaskManager != null)
+        {
+            return;
+        }
+
+        TaskManager manager = TaskManager.Instance;
+        if (manager == null) return;
+
+        subscribedTaskManager = manager;
+        subscribedTaskManager.OnTaskAdded += OnTaskAddedHandler;
+        subscribedTaskManager.OnTaskRemoved += OnTaskRemovedHandler;
+    }
+
+    private void UnsubscribeFromTaskManager()
+    {
+        if (subscribedTaskManager != null)
+        {
+            subscribedTaskManager.OnTaskAdded -= OnTaskAddedHandler;
+            subscribedTaskManager.OnTaskRemoved -= OnTaskRemovedHandler;
+        }
+
+        subscribedTaskManager = null;
     }
 }

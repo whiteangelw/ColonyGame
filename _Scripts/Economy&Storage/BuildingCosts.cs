@@ -7,6 +7,7 @@ public static class BuildingCosts
         switch (tileType)
         {
             case TileType.Chest: return ResourceType.Copper;
+            case TileType.PrintingPod: return ResourceType.Copper;
             case TileType.Solid: return ResourceType.Dirt;
             case TileType.Grass: return ResourceType.Dirt;
             case TileType.Stone: return ResourceType.Stone;
@@ -23,6 +24,7 @@ public static class BuildingCosts
         switch (tileType)
         {
             case TileType.Chest: return 5;
+            case TileType.PrintingPod: return 1;
             case TileType.Ladder: return 5;
             case TileType.Solid: return 1;
             case TileType.Grass: return 1;
@@ -43,6 +45,7 @@ public static class BuildingCosts
         switch (tileType)
         {
             case TileType.Chest: return 1f;
+            case TileType.PrintingPod: return 1f;
             case TileType.Ladder: return 1f;
             default: return 1f;
         }
@@ -61,6 +64,8 @@ public static class BuildingCosts
         {
             case TileType.Chest:
                 return BuildCategory.Storage;
+            case TileType.PrintingPod:
+                return BuildCategory.Machines;
             case TileType.Solid:
             case TileType.Grass:
             case TileType.Stone:

@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using System.Collections.Generic;
 
 public class CameraController : MonoBehaviour
 {
@@ -100,5 +101,35 @@ public class CameraController : MonoBehaviour
     public void FocusOnPosition(Vector3 worldPos)
     {
         transform.position = new Vector3(worldPos.x, worldPos.y, transform.position.z);
+        ClampPosition();
+    }
+
+    public void FocusOnTargets(IReadOnlyList<Transform> targets)
+    {
+        if (targets == null || targets.Count == 0)
+        {
+            return;
+        }
+
+        Vector3 center = Vector3.zero;
+        int validTargets = 0;
+
+        for (int i = 0; i < targets.Count; i++)
+        {
+            if (targets[i] == null)
+            {
+                continue;
+            }
+
+            center += targets[i].position;
+            validTargets++;
+        }
+
+        if (validTargets == 0)
+        {
+            return;
+        }
+
+        FocusOnPosition(center / validTargets);
     }
 }

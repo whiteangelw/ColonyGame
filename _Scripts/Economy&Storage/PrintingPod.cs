@@ -1,26 +1,39 @@
-using System.Collections;
 using UnityEngine;
 
-public class PrintingPod : MonoBehaviour
+public class PrintingPod : MonoBehaviour, IDismantlable
 {
     public static PrintingPod Instance { get; private set; }
 
-    [Header("Configurações do Spawn")]
-    [SerializeField] private GameObject duplicantPrefab;
-    [SerializeField] private float cooldownTime = 10f;
-    [SerializeField] private int maxPrintsAllowed = 5; // Limita o número máximo de cargas salvas na RAM
-
     [Header("Estado")]
-    public float timeRemaining;
-    public int availablePrints = 0;
+    [SerializeField] private bool isOperational;
+
+    [Header("Entrega de recompensas")]
+    [Tooltip("Ponto desejado para os recursos. Coloque-o fora da estrutura, junto ao chão.")]
+    [SerializeField] private Transform rewardDropPoint;
+
+    [Tooltip("Distância máxima, em células, para procurar um piso válido ao redor do ponto de entrega.")]
+    [SerializeField, Min(1)] private int rewardDropSearchRadius = 6;
+
+    public bool IsOperational => isOperational;
+    public Vector2Int GridPosition => gridPosition;
 
     public Vector2Int gridPosition;
     private GridManager gridManager;
 
     private void Awake()
     {
-        if (Instance == null) Instance = this;
-        else Destroy(gameObject);
+        if (Instance == null)
+        {
+            Instance = this;
+        }
+        else
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        // O prefab nunca nasce ativo antes de entrar no mundo construído.
+        isOperational = false;
     }
 
     private void Start()
@@ -28,8 +41,21 @@ public class PrintingPod : MonoBehaviour
         gridManager = GridManager.Instance != null ? GridManager.Instance : FindFirstObjectByType<GridManager>();
         UpdateGridPosition();
 
-        timeRemaining = cooldownTime;
-        StartCoroutine(CooldownRoutine());
+        SetOperational(true);
+    }
+
+    private void OnDestroy()
+    {
+        if (Instance == this)
+        {
+            Instance = null;
+        }
+
+        if (isOperational)
+        {
+            isOperational = false;
+            GameEvents.TriggerPrintingPodRemoved(this);
+        }
     }
 
     public void UpdateGridPosition()
@@ -41,54 +67,117 @@ public class PrintingPod : MonoBehaviour
         }
     }
 
-    private IEnumerator CooldownRoutine()
+    public void SetOperational(bool operational)
     {
-        WaitForSeconds waitFrame = new WaitForSeconds(0.1f);
-
-        while (true)
+        if (isOperational == operational)
         {
-            if (availablePrints >= maxPrintsAllowed)
-            {
-                // Para de rodar a contagem caso o limite de cargas na RAM tenha sido atingido
-                yield return waitFrame;
-                continue;
-            }
+            return;
+        }
 
-            timeRemaining = cooldownTime;
+        isOperational = operational;
 
-            while (timeRemaining > 0)
-            {
-                timeRemaining -= Time.deltaTime;
-                yield return null;
-            }
-
-            timeRemaining = 0;
-            availablePrints++;
+        if (isOperational)
+        {
+            UpdateGridPosition();
+            GameEvents.TriggerPrintingPodBuilt(this);
+        }
+        else
+        {
+            GameEvents.TriggerPrintingPodRemoved(this);
         }
     }
 
-    public void PrintDuplicant()
+    public void SetGridPosition(Vector2Int position)
     {
-        if (availablePrints <= 0) return;
-        if (duplicantPrefab == null) return;
+        gridPosition = position;
+    }
 
-        if (gridManager == null) UpdateGridPosition();
-
-        Vector3 spawnPos = transform.position;
-        if (gridManager != null)
+    public bool TryGetRewardDropPosition(out Vector3 worldPosition)
+    {
+        if (gridManager == null)
         {
-            spawnPos = new Vector3(
-                gridPosition.x * gridManager.cellSize + gridManager.cellSize / 2f,
-                gridPosition.y * gridManager.cellSize + gridManager.cellSize / 2f,
-                0f
-            );
+            gridManager = GridManager.Instance != null
+                ? GridManager.Instance
+                : FindFirstObjectByType<GridManager>();
         }
 
-        GameObject newDuplicant = Instantiate(duplicantPrefab, spawnPos, Quaternion.identity);
-
-        if (newDuplicant != null)
+        if (gridManager == null)
         {
-            availablePrints--;
+            worldPosition = transform.position;
+            return false;
         }
+
+        UpdateGridPosition();
+
+        Vector2Int desiredPosition = rewardDropPoint != null
+            ? gridManager.WorldToGridPosition(rewardDropPoint.position)
+            : gridPosition + Vector2Int.right * 2;
+
+        if (TryFindStandableDropCell(desiredPosition, out Vector2Int dropCell))
+        {
+            worldPosition = gridManager.GridToWorldPosition(dropCell);
+            return true;
+        }
+
+        worldPosition = transform.position;
+        return false;
+    }
+
+    private bool TryFindStandableDropCell(
+        Vector2Int center,
+        out Vector2Int result)
+    {
+        int maxRadius = Mathf.Max(1, rewardDropSearchRadius);
+
+        // Procura em anéis de distância Manhattan. Assim, o ponto indicado
+        // no prefab continua sendo a preferência, mas nunca aceitamos uma
+        // célula sem apoio ou a própria célula ocupada pela máquina.
+        for (int radius = 0; radius <= maxRadius; radius++)
+        {
+            for (int deltaX = -radius; deltaX <= radius; deltaX++)
+            {
+                int deltaY = radius - Mathf.Abs(deltaX);
+
+                Vector2Int upperCandidate =
+                    center + new Vector2Int(deltaX, deltaY);
+
+                if (IsValidDropCell(upperCandidate))
+                {
+                    result = upperCandidate;
+                    return true;
+                }
+
+                if (deltaY == 0)
+                {
+                    continue;
+                }
+
+                Vector2Int lowerCandidate =
+                    center + new Vector2Int(deltaX, -deltaY);
+
+                if (IsValidDropCell(lowerCandidate))
+                {
+                    result = lowerCandidate;
+                    return true;
+                }
+            }
+        }
+
+        result = default;
+        return false;
+    }
+
+    private bool IsValidDropCell(Vector2Int position)
+    {
+        return position != gridPosition
+            && gridManager.IsStandable(position.x, position.y);
+    }
+
+    public void Dismantle()
+    {
+        WorldInteractionService.Instance?.DismantleTile(
+            gridPosition.x,
+            gridPosition.y
+        );
     }
 }
