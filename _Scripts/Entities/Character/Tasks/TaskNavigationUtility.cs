@@ -4,6 +4,7 @@ using UnityEngine;
 public static class TaskNavigationUtility
 {
     private static readonly List<Vector2Int> candidatePositions = new List<Vector2Int>();
+    private static Vector2Int candidateSortOrigin;
 
     /// <summary>
     /// Calcula o caminho ideal para que um colono execute uma tarefa específica.
@@ -80,32 +81,10 @@ public static class TaskNavigationUtility
             return new List<Vector2Int>();
         }
 
-        List<Vector2Int> bestPath = null;
-        int shortestPathLength = int.MaxValue;
-
-        foreach (Vector2Int standPos in candidatePositions)
-        {
-            List<Vector2Int> path = PathfindingAStar.Instance.FindPath(
-                startPos,
-                standPos,
-                effectiveProfile
-            );
-
-            if (path == null || path.Count >= shortestPathLength)
-            {
-                continue;
-            }
-
-            shortestPathLength = path.Count;
-            bestPath = path;
-
-            if (shortestPathLength <= 1)
-            {
-                break;
-            }
-        }
-
-        return bestPath;
+        return FindPathToClosestReachableCandidate(
+            startPos,
+            effectiveProfile
+        );
     }
 
     public static List<Vector2Int> GetPathToInteractionPosition(
@@ -159,32 +138,61 @@ public static class TaskNavigationUtility
             return new List<Vector2Int>();
         }
 
-        List<Vector2Int> bestPath = null;
-        int shortestPathLength = int.MaxValue;
+        return FindPathToClosestReachableCandidate(
+            startPos,
+            effectiveProfile
+        );
+    }
 
-        foreach (Vector2Int candidatePos in candidatePositions)
+    private static List<Vector2Int> FindPathToClosestReachableCandidate(
+        Vector2Int startPos,
+        DuplicantCapabilityProfile profile)
+    {
+        candidateSortOrigin = startPos;
+        candidatePositions.Sort(CompareCandidateDistance);
+
+        ReachabilityManager reachability = ReachabilityManager.Instance;
+
+        foreach (Vector2Int candidate in candidatePositions)
         {
-            List<Vector2Int> path =
-                PathfindingAStar.Instance.FindPath(
+            if (reachability != null
+                && reachability.IsReady
+                && !reachability.CanReachExact(
                     startPos,
-                    candidatePos,
-                    effectiveProfile
-                );
-
-            if (path == null || path.Count >= shortestPathLength)
+                    candidate,
+                    profile))
             {
                 continue;
             }
 
-            shortestPathLength = path.Count;
-            bestPath = path;
+            List<Vector2Int> path = PathfindingAStar.Instance.FindPath(
+                startPos,
+                candidate,
+                profile
+            );
 
-            if (shortestPathLength <= 1)
+            if (path != null)
             {
-                break;
+                return path;
             }
         }
 
-        return bestPath;
+        return null;
+    }
+
+    private static int CompareCandidateDistance(
+        Vector2Int a,
+        Vector2Int b)
+    {
+        int distanceA = SquaredDistance(candidateSortOrigin, a);
+        int distanceB = SquaredDistance(candidateSortOrigin, b);
+        return distanceA.CompareTo(distanceB);
+    }
+
+    private static int SquaredDistance(Vector2Int a, Vector2Int b)
+    {
+        int deltaX = a.x - b.x;
+        int deltaY = a.y - b.y;
+        return deltaX * deltaX + deltaY * deltaY;
     }
 }

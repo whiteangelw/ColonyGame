@@ -12,7 +12,8 @@ public enum TileType
     Gold,       // Ouro
     Ladder,     // Escada
     Chest,
-    Bedrock
+    Bedrock,
+    PrintingPod // Máquina que libera ofertas periódicas de recompensa
 }
 
 public enum FogState
@@ -42,6 +43,9 @@ public class Tile
         this.x = x;
         this.y = y;
         this.type = type;
-        this.isPassable = (type == TileType.Empty || type == TileType.Ladder);
+        this.isPassable = type == TileType.Empty
+            || type == TileType.Ladder
+            || type == TileType.Chest
+            || type == TileType.PrintingPod;
     }
 }

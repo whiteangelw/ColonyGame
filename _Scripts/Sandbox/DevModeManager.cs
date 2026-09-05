@@ -11,7 +11,9 @@ public class DevModeManager : Singleton<DevModeManager>
         PaintLadder,
         SpawnChest,
         SpawnResource,
+        SpawnPreparedFood,
         SpawnDuplicant,
+        SpawnFoodPlant,
         TeleportDuplicant
     }
 
@@ -21,6 +23,7 @@ public class DevModeManager : Singleton<DevModeManager>
 
     [Header("Referências")]
     public GameObject duplicantPrefab;
+    [SerializeField] private DuplicantSpawnService duplicantSpawnService;
 
     private DuplicantController selectedDuplicant;
     private BoxSelectionHandler selectionHandler;
@@ -29,7 +32,7 @@ public class DevModeManager : Singleton<DevModeManager>
     private bool playerInputWasEnabled;
     private Vector2 diagnosticScrollPosition;
 
-    private Rect ToolsWindowRect => new Rect(10f, 10f, 250f, 410f);
+    private Rect ToolsWindowRect => new Rect(10f, 10f, 250f, 440f);
     private Rect DiagnosticsWindowRect => new Rect(
         Mathf.Max(270f, Screen.width - 390f),
         10f,
@@ -206,21 +209,46 @@ public class DevModeManager : Singleton<DevModeManager>
                 if (isFirstClick)
                 {
                     ItemSpawner.Instance?.SpawnResource(
-                        ResourceType.Stone,
+                        ResourceType.Copper,
                         worldPosition,
                         5
                     );
                 }
                 break;
 
-            case DevTool.SpawnDuplicant:
-                if (isFirstClick && duplicantPrefab != null)
+            case DevTool.SpawnPreparedFood:
+                if (isFirstClick)
                 {
-                    Instantiate(
-                        duplicantPrefab,
+                    ItemSpawner.Instance?.SpawnResource(
+                        ResourceType.PreparedMeal,
                         worldPosition,
-                        Quaternion.identity
-                    );
+                        5);
+                }
+                break;
+
+            case DevTool.SpawnDuplicant:
+                if (isFirstClick)
+                {
+                    DuplicantSpawnService spawnService =
+                        GetDuplicantSpawnService();
+
+                    if (spawnService != null)
+                    {
+                        spawnService.SpawnRandomGroup(gridPosition, 1);
+                    }
+                    else
+                    {
+                        Debug.LogError(
+                            "[DevMode] DuplicantSpawnService não encontrado."
+                        );
+                    }
+                }
+                break;
+
+            case DevTool.SpawnFoodPlant:
+                if (isFirstClick)
+                {
+                    FloraManager.Instance?.SpawnDevFlora(gridPosition);
                 }
                 break;
 
@@ -233,6 +261,17 @@ public class DevModeManager : Singleton<DevModeManager>
                 }
                 break;
         }
+    }
+
+    private DuplicantSpawnService GetDuplicantSpawnService()
+    {
+        if (duplicantSpawnService == null)
+        {
+            duplicantSpawnService =
+                FindFirstObjectByType<DuplicantSpawnService>();
+        }
+
+        return duplicantSpawnService;
     }
 
     private void SelectDuplicantAt(Vector3 worldPosition)
@@ -286,10 +325,12 @@ public class DevModeManager : Singleton<DevModeManager>
 
         GUILayout.Space(5f);
         DrawToolToggle(DevTool.SpawnChest, "Criar baú");
-        DrawToolToggle(DevTool.SpawnResource, "Criar 5 pedras");
+        DrawToolToggle(DevTool.SpawnResource, "Criar 5 Cobres");
+        DrawToolToggle(DevTool.SpawnPreparedFood, "Criar 5 refeições");
 
         GUILayout.Space(5f);
         DrawToolToggle(DevTool.SpawnDuplicant, "Criar duplicant");
+        DrawToolToggle(DevTool.SpawnFoodPlant, "Criar planta comestível");
         DrawToolToggle(
             DevTool.TeleportDuplicant,
             "Teletransportar selecionado"
@@ -342,6 +383,10 @@ public class DevModeManager : Singleton<DevModeManager>
         DuplicantTaskRunner runner = selectedDuplicant.TaskRunner;
         DuplicantInventory inventory =
             selectedDuplicant.GetComponent<DuplicantInventory>();
+        DuplicantVitals vitals =
+            selectedDuplicant.GetComponent<DuplicantVitals>();
+        DuplicantStatusEffects statusEffects =
+            selectedDuplicant.GetComponent<DuplicantStatusEffects>();
         Task task = selectedDuplicant.currentTask;
 
         GUILayout.Label($"Nome: {selectedDuplicant.name}");
@@ -391,6 +436,62 @@ public class DevModeManager : Singleton<DevModeManager>
                 ? $"Carregando: {inventory.CarriedAmount}x {inventory.CarriedType}"
                 : "Carregando: nada"
         );
+
+        GUILayout.Space(8f);
+        GUILayout.Label("NECESSIDADES");
+
+        if (vitals != null)
+        {
+            GUILayout.Label(
+                $"Energia: {vitals.CurrentEnergy:F1}/{vitals.MaximumEnergy:F1} ({vitals.EnergyPercent:P0})"
+            );
+            GUILayout.Label(
+                $"Fome: {vitals.CurrentHunger:F1}/{vitals.MaximumHunger:F1} ({vitals.HungerPercent:P0})"
+            );
+            GUILayout.Label($"Estado: {vitals.CurrentNeedState}");
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Zerar energia"))
+            {
+                vitals.SetEnergyPercent(0f);
+            }
+            if (GUILayout.Button("Energia 100%"))
+            {
+                vitals.SetEnergyPercent(1f);
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Zerar fome"))
+            {
+                vitals.SetHungerPercent(0f);
+            }
+            if (GUILayout.Button("Fome 100%"))
+            {
+                vitals.SetHungerPercent(1f);
+            }
+            GUILayout.EndHorizontal();
+        }
+        else
+        {
+            GUILayout.Label("DuplicantVitals não encontrado.");
+        }
+
+        GUILayout.Space(8f);
+        GUILayout.Label("EFEITOS");
+        if (statusEffects != null && statusEffects.HasRawFoodDiscomfort)
+        {
+            GUILayout.Label(
+                $"Desconforto alimentar: {statusEffects.RawFoodDiscomfortRemaining:F1}s"
+            );
+            GUILayout.Label(
+                $"Penalidade de trabalho: {statusEffects.WorkPenaltyPercent:P0}"
+            );
+        }
+        else
+        {
+            GUILayout.Label("Nenhum efeito ativo.");
+        }
 
         if (runner != null)
         {

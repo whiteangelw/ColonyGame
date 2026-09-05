@@ -29,6 +29,7 @@ public class DuplicantTaskRunner : MonoBehaviour
     private bool failureRecordedForActiveTask;
     private bool applicationIsQuitting;
     private bool isFinalizingTask;
+    private IFoodSource reservedFoodSource;
 
     public TaskFailureReason LastFailureReason { get; private set; }
     public string LastFailureDetails { get; private set; } = "Nenhuma";
@@ -61,7 +62,8 @@ public class DuplicantTaskRunner : MonoBehaviour
 
     private void OnDisable()
     {
-        if (!applicationIsQuitting
+        if (!SaveGameRuntime.IsLoading
+            && !applicationIsQuitting
             && !isFinalizingTask
             && (activeTask != null || controller.currentTask != null))
         {
@@ -111,6 +113,81 @@ public class DuplicantTaskRunner : MonoBehaviour
         }
 
         yield return StartCoroutine(ExecuteGenericTaskRoutine(task, path));
+    }
+
+    public IEnumerator ExecuteEmergencyEatingRoutine(
+        IFoodSource source,
+        List<Vector2Int> path)
+    {
+        reservedFoodSource = source;
+
+        if (source == null || !source.HasFood)
+        {
+            ReleaseFoodReservation();
+            yield break;
+        }
+
+        yield return StartCoroutine(
+            FollowPathToInteractionPosition(source.GridPosition, path)
+        );
+
+        if (!pathFollowSucceeded || reservedFoodSource == null
+            || !reservedFoodSource.HasFood)
+        {
+            ReleaseFoodReservation();
+            controller.currentState = DuplicantController.WorkerState.Idle;
+            yield break;
+        }
+
+        controller.currentState = DuplicantController.WorkerState.Eating;
+        LifeCycleSettingsSO settings = LifeCycleSystem.Instance != null
+            ? LifeCycleSystem.Instance.Settings
+            : null;
+        yield return new WaitForSeconds(
+            settings != null ? settings.rawFoodEatingDuration : 2f
+        );
+
+        IFoodSource food = reservedFoodSource;
+        if (food != null && food.TryConsumeReservedPortion(
+                controller,
+                out float hungerRestored,
+                out bool isRawFood))
+        {
+            controller.Vitals?.RestoreHunger(hungerRestored);
+            ApplyRawFoodEffectIfNeeded(isRawFood, settings);
+            GameEvents.TriggerFloatingTextRequested(
+                $"Comeu alimento cru (+{hungerRestored:F0})",
+                transform.position,
+                Color.green);
+        }
+
+        reservedFoodSource = null;
+        controller.currentState = DuplicantController.WorkerState.Idle;
+    }
+
+    private void ApplyRawFoodEffectIfNeeded(
+        bool isRawFood,
+        LifeCycleSettingsSO settings)
+    {
+        if (!isRawFood || settings == null || controller.StatusEffects == null
+            || Random.value > settings.rawFoodDiscomfortChance)
+        {
+            return;
+        }
+
+        controller.StatusEffects.ApplyRawFoodDiscomfort(
+            settings.rawFoodDiscomfortDuration,
+            settings.rawFoodWorkPenaltyPercent);
+
+        GameEvents.TriggerFloatingTextRequested(
+            "Desconforto por alimento cru",
+            transform.position,
+            Color.yellow);
+    }
+
+    public void CancelEmergencyFoodState()
+    {
+        ReleaseFoodReservation();
     }
 
     private IEnumerator ExecuteDeliveryTaskRoutine(Task task)
@@ -316,7 +393,8 @@ public class DuplicantTaskRunner : MonoBehaviour
         bool isCompleted = false;
         while (!isCompleted && bp != null)
         {
-            float workDelta = Time.deltaTime;
+            float workDelta = Time.deltaTime
+                * controller.WorkEfficiencyMultiplier;
             isCompleted = bp.ApplyWork(workDelta);
             yield return null;
         }
@@ -704,7 +782,9 @@ public class DuplicantTaskRunner : MonoBehaviour
         }
 
         controller.currentState = DuplicantController.WorkerState.Working;
-        yield return new WaitForSeconds(controller.workDuration);
+        yield return new WaitForSeconds(
+            controller.workDuration
+            / Mathf.Max(0.05f, controller.WorkEfficiencyMultiplier));
 
         if (!TaskManager.Instance.IsTaskValid(task))
         {
@@ -1233,6 +1313,16 @@ public class DuplicantTaskRunner : MonoBehaviour
         ReleaseStorageReservation();
         ReleaseGroundItemReservation();
         ReleaseAdditionalHaulTask();
+        ReleaseFoodReservation();
+    }
+
+    private void ReleaseFoodReservation()
+    {
+        if (reservedFoodSource != null)
+        {
+            reservedFoodSource.ReleaseReservation(controller);
+            reservedFoodSource = null;
+        }
     }
 
     private Vector3 GetSafeDropPosition()

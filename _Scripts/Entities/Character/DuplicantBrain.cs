@@ -8,20 +8,30 @@ public class DuplicantBrain : MonoBehaviour
     private DuplicantController controller;
     private DuplicantMovement movement;
     private DuplicantTaskRunner taskRunner;
+    private DuplicantVitals vitals;
 
     private float searchCooldown = 0f;
     private Coroutine brainCoroutine;
     private Coroutine activeTaskCoroutine;
+    private Coroutine emergencyRestCoroutine;
+    private Coroutine emergencyFoodCoroutine;
+    private float nextPreventiveFoodSearchTime;
 
     private void Awake()
     {
         controller = GetComponent<DuplicantController>();
         movement = GetComponent<DuplicantMovement>();
         taskRunner = GetComponent<DuplicantTaskRunner>();
+        vitals = GetComponent<DuplicantVitals>();
     }
 
     private void OnEnable()
     {
+        if (vitals != null)
+        {
+            vitals.OnEmergencyRestRequested += HandleEmergencyRestRequested;
+        }
+
         if (brainCoroutine == null)
         {
             brainCoroutine = StartCoroutine(WorkerBrainRoutine());
@@ -30,9 +40,28 @@ public class DuplicantBrain : MonoBehaviour
 
     private void OnDisable()
     {
+        if (vitals != null)
+        {
+            vitals.OnEmergencyRestRequested -= HandleEmergencyRestRequested;
+        }
+
+        if (emergencyRestCoroutine != null)
+        {
+            StopCoroutine(emergencyRestCoroutine);
+            emergencyRestCoroutine = null;
+            vitals?.CancelEmergencyRest();
+        }
+
         if (activeTaskCoroutine != null)
         {
             StopCoroutine(activeTaskCoroutine);
+        }
+
+        if (emergencyFoodCoroutine != null)
+        {
+            StopCoroutine(emergencyFoodCoroutine);
+            emergencyFoodCoroutine = null;
+            taskRunner?.CancelEmergencyFoodState();
         }
 
         if (brainCoroutine != null)
@@ -66,6 +95,18 @@ public class DuplicantBrain : MonoBehaviour
             {
                 searchCooldown -= 0.3f;
                 continue;
+            }
+
+            if (vitals != null
+                && (vitals.IsHungry || vitals.IsStarving)
+                && !vitals.IsEmergencyResting
+                && emergencyRestCoroutine == null
+                && emergencyFoodCoroutine == null
+                && controller.currentState == DuplicantController.WorkerState.Idle
+                && Time.time >= nextPreventiveFoodSearchTime)
+            {
+                bool allowEmergencySources = vitals.CurrentHunger <= 0f;
+                if (TryStartFoodRoutine(allowEmergencySources)) continue;
             }
 
             if (controller.currentState == DuplicantController.WorkerState.Idle && controller.currentTask == null && !movement.ShouldFall())
@@ -136,5 +177,98 @@ public class DuplicantBrain : MonoBehaviour
     public void RequestImmediateTaskSearch()
     {
         searchCooldown = 0f;
+    }
+
+    private void HandleEmergencyRestRequested(DuplicantVitals source)
+    {
+        if (emergencyRestCoroutine != null || !isActiveAndEnabled)
+        {
+            return;
+        }
+
+        if (emergencyFoodCoroutine != null)
+        {
+            StopCoroutine(emergencyFoodCoroutine);
+            emergencyFoodCoroutine = null;
+            taskRunner.CancelEmergencyFoodState();
+        }
+
+        controller.CancelCurrentTaskExecution();
+        emergencyRestCoroutine = StartCoroutine(EmergencyRestRoutine());
+    }
+
+    private IEnumerator EmergencyRestRoutine()
+    {
+        vitals.BeginEmergencyRest();
+        controller.currentState = DuplicantController.WorkerState.Resting;
+
+        GameEvents.TriggerFloatingTextRequested(
+            "Soneca de emergência",
+            controller.transform.position,
+            Color.cyan
+        );
+
+        LifeCycleSettingsSO settings = LifeCycleSystem.Instance != null
+            ? LifeCycleSystem.Instance.Settings
+            : null;
+        float duration = settings != null
+            ? settings.emergencyNapDuration
+            : 5f;
+        float recovery = settings != null
+            ? settings.emergencyNapRecoveryPercent
+            : 0.20f;
+
+        yield return new WaitForSeconds(duration);
+
+        vitals.CompleteEmergencyRest(recovery);
+        controller.currentState = DuplicantController.WorkerState.Idle;
+        emergencyRestCoroutine = null;
+        RequestImmediateTaskSearch();
+    }
+
+    private bool TryStartFoodRoutine(bool allowEmergencySources)
+    {
+        if (FoodSourceRegistry.Instance != null
+            && FoodSourceRegistry.Instance.TryReserveReachableFood(
+                controller,
+                allowEmergencySources,
+                out IFoodSource source,
+                out List<Vector2Int> path))
+        {
+            emergencyFoodCoroutine = StartCoroutine(
+                EmergencyFoodRoutine(source, path));
+            return true;
+        }
+
+        LifeCycleSettingsSO settings = LifeCycleSystem.Instance != null
+            ? LifeCycleSystem.Instance.Settings
+            : null;
+        float retry = settings != null ? settings.foodSearchRetryDelay : 3f;
+        nextPreventiveFoodSearchTime = Time.time + retry;
+
+        if (allowEmergencySources)
+        {
+            GameEvents.TriggerFloatingTextRequested(
+                "Sem alimento alcançável",
+                transform.position,
+                Color.red);
+        }
+
+        return false;
+    }
+
+    private IEnumerator EmergencyFoodRoutine(
+        IFoodSource source,
+        List<Vector2Int> path)
+    {
+        controller.CancelCurrentTaskExecution();
+        yield return taskRunner.ExecuteEmergencyEatingRoutine(source, path);
+
+        LifeCycleSettingsSO settings = LifeCycleSystem.Instance != null
+            ? LifeCycleSystem.Instance.Settings
+            : null;
+        searchCooldown = settings != null ? settings.foodSearchRetryDelay : 3f;
+        nextPreventiveFoodSearchTime = Time.time + searchCooldown;
+        emergencyFoodCoroutine = null;
     }
 }

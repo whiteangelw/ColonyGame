@@ -3,15 +3,20 @@ using UnityEngine;
 [RequireComponent(typeof(DuplicantMovement))]
 [RequireComponent(typeof(DuplicantTaskRunner))]
 [RequireComponent(typeof(DuplicantBrain))]
+[RequireComponent(typeof(DuplicantVitals))]
+[RequireComponent(typeof(DuplicantStatusEffects))]
 public class DuplicantController : MonoBehaviour
 {
-    public enum WorkerState { Idle, Moving, Working, Falling }
+    public enum WorkerState { Idle, Moving, Working, Falling, Resting, Eating }
 
     [Header("Referências")]
     public DuplicantCapabilityProfile capabilityProfile;
 
     [Tooltip("Define afinidades de trabalho. Sem perfil, este duplicant é neutro.")]
     public DuplicantWorkProfile workProfile;
+
+    [Tooltip("Define metabolismo e recuperação. Sem perfil, usa valores neutros.")]
+    public DuplicantLifeProfile lifeProfile;
 
     [Header("Configurações do Colono")]
     public float baseMoveSpeed = 4f;
@@ -27,6 +32,11 @@ public class DuplicantController : MonoBehaviour
     public DuplicantMovement Movement { get; private set; }
     public DuplicantTaskRunner TaskRunner { get; private set; }
     public DuplicantBrain Brain { get; private set; }
+    public DuplicantVitals Vitals { get; private set; }
+    public DuplicantStatusEffects StatusEffects { get; private set; }
+    public float WorkEfficiencyMultiplier => StatusEffects != null
+        ? StatusEffects.WorkEfficiencyMultiplier
+        : 1f;
 
     private bool isRecovering;
 
@@ -42,6 +52,28 @@ public class DuplicantController : MonoBehaviour
         Movement = GetComponent<DuplicantMovement>();
         TaskRunner = GetComponent<DuplicantTaskRunner>();
         Brain = GetComponent<DuplicantBrain>();
+        EnsureVitals();
+        StatusEffects = GetComponent<DuplicantStatusEffects>();
+
+        if (StatusEffects == null)
+        {
+            StatusEffects = gameObject.AddComponent<DuplicantStatusEffects>();
+        }
+    }
+
+    public DuplicantVitals EnsureVitals()
+    {
+        if (Vitals == null)
+        {
+            Vitals = GetComponent<DuplicantVitals>();
+        }
+
+        if (Vitals == null)
+        {
+            Vitals = gameObject.AddComponent<DuplicantVitals>();
+        }
+
+        return Vitals;
     }
 
     private void OnEnable()
@@ -146,6 +178,15 @@ public class DuplicantController : MonoBehaviour
 
         currentTask = null;
         currentState = WorkerState.Idle;
+        Brain?.RequestImmediateTaskSearch();
+    }
+
+    public void RestoreAt(Vector2Int restoredGridPosition)
+    {
+        currentTask = null;
+        currentState = WorkerState.Idle;
+        gridPosition = restoredGridPosition;
+        Movement?.SnapToGrid(restoredGridPosition);
         Brain?.RequestImmediateTaskSearch();
     }
 }

@@ -5,8 +5,33 @@ public class StructureManager : Singleton<StructureManager>
 {
     [Header("Prefabs de Estruturas")]
     [SerializeField] private GameObject chestPrefab;
+    [SerializeField] private GameObject printingPodPrefab;
 
     private readonly Dictionary<Vector2Int, StorageStructure> activeStorages = new Dictionary<Vector2Int, StorageStructure>();
+    private readonly Dictionary<Vector2Int, PrintingPod> activePrintingPods =
+        new Dictionary<Vector2Int, PrintingPod>();
+
+    public PrintingPod GetPrintingPodAt(Vector2Int position)
+    {
+        activePrintingPods.TryGetValue(position, out PrintingPod printingPod);
+        return printingPod;
+    }
+
+    public void RegisterPrintingPod(Vector2Int position, PrintingPod printingPod)
+    {
+        if (printingPod == null)
+        {
+            return;
+        }
+
+        activePrintingPods[position] = printingPod;
+        printingPod.SetGridPosition(position);
+    }
+
+    public void UnregisterPrintingPod(Vector2Int position)
+    {
+        activePrintingPods.Remove(position);
+    }
 
     public void RegisterStorage(Vector2Int pos, StorageStructure storage)
     {
@@ -53,6 +78,46 @@ public class StructureManager : Singleton<StructureManager>
         }
 
         return storages;
+    }
+
+    public List<PrintingPod> GetRegisteredPrintingPods()
+    {
+        List<PrintingPod> printingPods = new List<PrintingPod>();
+
+        foreach (PrintingPod printingPod in activePrintingPods.Values)
+        {
+            if (printingPod != null)
+            {
+                printingPods.Add(printingPod);
+            }
+        }
+
+        return printingPods;
+    }
+
+    public void ClearStructuresForLoad()
+    {
+        foreach (StorageStructure storage in activeStorages.Values)
+        {
+            if (storage != null)
+            {
+                storage.gameObject.SetActive(false);
+                Destroy(storage.gameObject);
+            }
+        }
+
+        foreach (PrintingPod printingPod in activePrintingPods.Values)
+        {
+            if (printingPod != null)
+            {
+                printingPod.SetOperational(false);
+                printingPod.gameObject.SetActive(false);
+                Destroy(printingPod.gameObject);
+            }
+        }
+
+        activeStorages.Clear();
+        activePrintingPods.Clear();
     }
 
     public List<StorageStructure> GetStoragesWithResource(
@@ -261,11 +326,48 @@ public class StructureManager : Singleton<StructureManager>
                 RegisterStorage(position, storage);
             }
         }
+        else if (type == TileType.PrintingPod
+            && printingPodPrefab != null
+            && PrintingPod.Instance == null
+            && GetPrintingPodAt(position) == null)
+        {
+            Vector3 spawnPos = GridManager.Instance.GridToWorldPosition(position);
+            GameObject obj = Instantiate(
+                printingPodPrefab,
+                spawnPos,
+                Quaternion.identity
+            );
+
+            if (obj.TryGetComponent<PrintingPod>(out PrintingPod printingPod))
+            {
+                RegisterPrintingPod(position, printingPod);
+
+                if (SaveGameRuntime.IsLoading)
+                {
+                    printingPod.SetOperational(true);
+                }
+            }
+            else
+            {
+                Debug.LogError(
+                    "[StructureManager] O prefab da máquina não possui PrintingPod."
+                );
+                Destroy(obj);
+            }
+        }
     }
 
     public void DismantleStructureAt(Vector2Int position)
     {
         if (GridManager.Instance == null) return;
+
+        PrintingPod printingPod = GetPrintingPodAt(position);
+
+        if (printingPod != null)
+        {
+            DismantlePrintingPod(position, printingPod);
+            return;
+        }
 
         StorageStructure storage = GetStorageAt(position);
 
@@ -310,5 +412,46 @@ public class StructureManager : Singleton<StructureManager>
 
         // 6. FEEDBACK VISUAL
         GameEvents.TriggerFloatingTextRequested("Estrutura Desmontada", spawnPos, Color.yellow);
+    }
+
+    private void DismantlePrintingPod(
+        Vector2Int position,
+        PrintingPod printingPod)
+    {
+        Vector3 spawnPosition =
+            GridManager.Instance.GridToWorldPosition(position);
+
+        printingPod.SetOperational(false);
+
+        ResourceType resource = BuildingCosts.GetRequiredResource(
+            TileType.PrintingPod
+        );
+        int refundAmount = BuildingCosts.GetRefundAmount(
+            TileType.PrintingPod
+        );
+
+        if (refundAmount > 0)
+        {
+            ItemSpawner.Instance?.SpawnResource(
+                resource,
+                spawnPosition,
+                refundAmount
+            );
+        }
+
+        UnregisterPrintingPod(position);
+        GridManager.Instance.SetTileType(
+            position.x,
+            position.y,
+            TileType.Empty
+        );
+        Destroy(printingPod.gameObject);
+
+        StockpileManager.Instance?.RequestRefresh();
+        GameEvents.TriggerFloatingTextRequested(
+            "Máquina desmontada",
+            spawnPosition,
+            Color.yellow
+        );
     }
 }

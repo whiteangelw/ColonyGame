@@ -28,9 +28,27 @@ public static class GameEvents
     public static void TriggerToggleBuildMenuRequested(bool shouldOpen) => OnToggleBuildMenuRequested?.Invoke(shouldOpen);
 
     // --- EVENTOS DIVERSOS DA COLÔNIA ---
-    public static event Action<int, float> OnPrintingPodStateChanged;
-    public static void TriggerPrintingPodStateChanged(int printsAvailable, float timeRemaining)
-        => OnPrintingPodStateChanged?.Invoke(printsAvailable, timeRemaining);
+    public static event Action<PrintingPod> OnPrintingPodBuilt;
+    public static void TriggerPrintingPodBuilt(PrintingPod printingPod)
+        => OnPrintingPodBuilt?.Invoke(printingPod);
+
+    public static event Action<PrintingPod> OnPrintingPodRemoved;
+    public static void TriggerPrintingPodRemoved(PrintingPod printingPod)
+        => OnPrintingPodRemoved?.Invoke(printingPod);
+
+    public static event Action<float, bool> OnPrintingPodTimerChanged;
+    public static void TriggerPrintingPodTimerChanged(
+        float timeRemaining,
+        bool offerReady)
+        => OnPrintingPodTimerChanged?.Invoke(timeRemaining, offerReady);
+
+    public static event Action OnRewardOfferReady;
+    public static void TriggerRewardOfferReady()
+        => OnRewardOfferReady?.Invoke();
+
+    public static event Action<TileType> OnRecipeUnlocked;
+    public static void TriggerRecipeUnlocked(TileType tileType)
+        => OnRecipeUnlocked?.Invoke(tileType);
 
     public static event Action<TaskType, int> OnPriorityChanged;
     public static void TriggerPriorityChanged(TaskType type, int newPriority)
