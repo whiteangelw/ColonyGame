@@ -13,5 +13,7 @@ public struct BuildRecipe
     public string displayName;
     public TileType tileType;
     public BuildCategory category;
+    [Tooltip("Terrain/Structure são físicos. BackWall e Decoration coexistem com eles.")]
+    public GridLayer placementLayer;
     public Sprite icon;
 }

@@ -24,6 +24,10 @@ public static class GameEvents
     public static event Action<TileType> OnBuildTileSelected;
     public static void TriggerBuildTileSelected(TileType tileType) => OnBuildTileSelected?.Invoke(tileType);
 
+    public static event Action<TileType, GridLayer> OnBuildRecipeSelected;
+    public static void TriggerBuildRecipeSelected(TileType tileType, GridLayer layer)
+        => OnBuildRecipeSelected?.Invoke(tileType, layer);
+
     public static event Action<bool> OnToggleBuildMenuRequested;
     public static void TriggerToggleBuildMenuRequested(bool shouldOpen) => OnToggleBuildMenuRequested?.Invoke(shouldOpen);
 

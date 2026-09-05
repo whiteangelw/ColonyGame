@@ -16,10 +16,17 @@ public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantla
     private readonly Dictionary<ResourceType, int> localInventory = new Dictionary<ResourceType, int>();
     private readonly Dictionary<ResourceType, int> reservedSpace = new Dictionary<ResourceType, int>();
     private readonly Dictionary<ResourceType, int> reservedFood = new Dictionary<ResourceType, int>();
-    private readonly Dictionary<DuplicantController, ResourceType> foodReservations =
-        new Dictionary<DuplicantController, ResourceType>();
+    private sealed class FoodReservation
+    {
+        public ResourceType type;
+        public int remainingPortions;
+    }
+
+    private readonly Dictionary<DuplicantController, FoodReservation> foodReservations =
+        new Dictionary<DuplicantController, FoodReservation>();
 
     public bool IsEmergencyOnly => false;
+    public FoodSourceKind SourceKind => FoodSourceKind.Storage;
     public bool HasFood => FindBestAvailableFood(out _, out _);
 
     private void OnEnable()
@@ -132,15 +139,64 @@ public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantla
         return false;
     }
 
-    public bool TryReservePortion(DuplicantController duplicant)
+    public void CollectFoodOptions(List<FoodOption> results)
     {
-        if (duplicant == null || IsBeingDismantled) return false;
-        if (foodReservations.ContainsKey(duplicant)) return true;
-        if (!FindBestAvailableFood(out ResourceType type, out _)) return false;
+        if (results == null || IsBeingDismantled) return;
 
-        foodReservations[duplicant] = type;
-        reservedFood[type] = GetReservedFood(type) + 1;
+        foreach (ResourceType type in System.Enum.GetValues(typeof(ResourceType)))
+        {
+            int available = GetLocalAmount(type) - GetReservedFood(type);
+            ItemDataSO data = ItemSpawner.Instance?.GetItemData(type);
+            if (available <= 0 || data == null || !data.isFood) continue;
+
+            results.Add(new FoodOption
+            {
+                resourceType = type,
+                availablePortions = available,
+                hungerRestoredPerPortion = data.hungerRestored,
+                isRawFood = data.isRawFood,
+                quality = data.foodQuality
+            });
+        }
+    }
+
+    public bool TryReserveMeal(
+        DuplicantController duplicant,
+        ResourceType foodType,
+        int requestedPortions,
+        out int reservedAmount)
+    {
+        reservedAmount = 0;
+        if (duplicant == null || IsBeingDismantled || requestedPortions <= 0)
+        {
+            return false;
+        }
+
+        if (foodReservations.TryGetValue(duplicant, out FoodReservation existing))
+        {
+            reservedAmount = existing.remainingPortions;
+            return existing.type == foodType && reservedAmount > 0;
+        }
+
+        int available = GetLocalAmount(foodType) - GetReservedFood(foodType);
+        reservedAmount = Mathf.Min(requestedPortions, available);
+        if (reservedAmount <= 0) return false;
+
+        foodReservations[duplicant] = new FoodReservation
+        {
+            type = foodType,
+            remainingPortions = reservedAmount
+        };
+        reservedFood[foodType] = GetReservedFood(foodType) + reservedAmount;
         return true;
+    }
+
+    public int GetReservedPortionCount(DuplicantController duplicant)
+    {
+        return duplicant != null
+            && foodReservations.TryGetValue(duplicant, out FoodReservation reservation)
+                ? reservation.remainingPortions
+                : 0;
     }
 
     public bool TryConsumeReservedPortion(
@@ -152,21 +208,32 @@ public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantla
         isRawFood = false;
 
         if (duplicant == null
-            || !foodReservations.TryGetValue(duplicant, out ResourceType type))
+            || !foodReservations.TryGetValue(duplicant, out FoodReservation reservation)
+            || reservation.remainingPortions <= 0)
         {
             return false;
         }
 
+        ResourceType type = reservation.type;
         ItemDataSO data = ItemSpawner.Instance?.GetItemData(type);
         bool canConsume = !IsBeingDismantled
             && data != null
             && data.isFood
             && GetLocalAmount(type) > 0;
 
-        ReleaseReservation(duplicant);
-        if (!canConsume) return false;
+        if (!canConsume)
+        {
+            ReleaseReservation(duplicant);
+            return false;
+        }
 
         localInventory[type]--;
+        reservation.remainingPortions--;
+        reservedFood[type] = Mathf.Max(0, GetReservedFood(type) - 1);
+        if (reservation.remainingPortions <= 0)
+        {
+            foodReservations.Remove(duplicant);
+        }
         hungerRestored = Mathf.Max(0f, data.hungerRestored);
         isRawFood = data.isRawFood;
         GameEvents.TriggerChestUpdated(gridPosition);
@@ -177,13 +244,15 @@ public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantla
     public void ReleaseReservation(DuplicantController duplicant)
     {
         if (duplicant == null
-            || !foodReservations.TryGetValue(duplicant, out ResourceType type))
+            || !foodReservations.TryGetValue(duplicant, out FoodReservation reservation))
         {
             return;
         }
 
         foodReservations.Remove(duplicant);
-        reservedFood[type] = Mathf.Max(0, GetReservedFood(type) - 1);
+        reservedFood[reservation.type] = Mathf.Max(
+            0,
+            GetReservedFood(reservation.type) - reservation.remainingPortions);
     }
 
     private bool FindBestAvailableFood(

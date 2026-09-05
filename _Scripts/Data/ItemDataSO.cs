@@ -13,4 +13,7 @@ public class ItemDataSO : ScriptableObject
     public bool isFood;
     [Min(0f)] public float hungerRestored = 25f;
     public bool isRawFood;
+    [Range(0, 5)] public int foodQuality = 1;
+    [Tooltip("Se desmarcado, só será considerado em fome crítica.")]
+    public bool allowPreventiveConsumption = true;
 }

@@ -17,6 +17,10 @@ public class DuplicantBrain : MonoBehaviour
     private Coroutine emergencyFoodCoroutine;
     private float nextPreventiveFoodSearchTime;
 
+    public MealPlan CurrentMealPlan { get; private set; }
+    public FoodSearchFailureReason LastFoodFailureReason { get; private set; }
+    public string LastFoodFailureDetails { get; private set; } = "Nenhum";
+
     private void Awake()
     {
         controller = GetComponent<DuplicantController>();
@@ -62,6 +66,7 @@ public class DuplicantBrain : MonoBehaviour
             StopCoroutine(emergencyFoodCoroutine);
             emergencyFoodCoroutine = null;
             taskRunner?.CancelEmergencyFoodState();
+            CurrentMealPlan = null;
         }
 
         if (brainCoroutine != null)
@@ -97,16 +102,19 @@ public class DuplicantBrain : MonoBehaviour
                 continue;
             }
 
+            bool maySeekFood = controller.currentState
+                    == DuplicantController.WorkerState.Idle
+                || (vitals != null && vitals.IsStarving);
+
             if (vitals != null
                 && (vitals.IsHungry || vitals.IsStarving)
                 && !vitals.IsEmergencyResting
                 && emergencyRestCoroutine == null
                 && emergencyFoodCoroutine == null
-                && controller.currentState == DuplicantController.WorkerState.Idle
+                && maySeekFood
                 && Time.time >= nextPreventiveFoodSearchTime)
             {
-                bool allowEmergencySources = vitals.CurrentHunger <= 0f;
-                if (TryStartFoodRoutine(allowEmergencySources)) continue;
+                if (TryStartFoodRoutine()) continue;
             }
 
             if (controller.currentState == DuplicantController.WorkerState.Idle && controller.currentTask == null && !movement.ShouldFall())
@@ -164,13 +172,20 @@ public class DuplicantBrain : MonoBehaviour
 
     public void CancelActiveTaskExecution()
     {
-        if (activeTaskCoroutine == null)
+        if (activeTaskCoroutine != null)
         {
-            return;
+            StopCoroutine(activeTaskCoroutine);
+            activeTaskCoroutine = null;
         }
 
-        StopCoroutine(activeTaskCoroutine);
-        activeTaskCoroutine = null;
+        if (emergencyFoodCoroutine != null)
+        {
+            StopCoroutine(emergencyFoodCoroutine);
+            emergencyFoodCoroutine = null;
+            taskRunner?.CancelEmergencyFoodState();
+            CurrentMealPlan = null;
+        }
+
         searchCooldown = 0f;
     }
 
@@ -191,6 +206,7 @@ public class DuplicantBrain : MonoBehaviour
             StopCoroutine(emergencyFoodCoroutine);
             emergencyFoodCoroutine = null;
             taskRunner.CancelEmergencyFoodState();
+            CurrentMealPlan = null;
         }
 
         controller.CancelCurrentTaskExecution();
@@ -226,30 +242,52 @@ public class DuplicantBrain : MonoBehaviour
         RequestImmediateTaskSearch();
     }
 
-    private bool TryStartFoodRoutine(bool allowEmergencySources)
+    private bool TryStartFoodRoutine()
     {
+        MealPlan mealPlan;
+        FoodSearchFailureReason failureReason =
+            FoodSearchFailureReason.NoFoodAvailable;
+        string failureDetails = "FoodSourceRegistry não encontrado.";
+
         if (FoodSourceRegistry.Instance != null
-            && FoodSourceRegistry.Instance.TryReserveReachableFood(
+            && FoodSourceRegistry.Instance.TryCreateMealPlan(
                 controller,
-                allowEmergencySources,
-                out IFoodSource source,
-                out List<Vector2Int> path))
+                out mealPlan,
+                out failureReason,
+                out failureDetails))
         {
+            // Cancela o trabalho antes de registrar a rotina alimentar.
+            // Assim, CancelCurrentTaskExecution não interrompe a própria refeição.
+            controller.CancelCurrentTaskExecution();
+            CurrentMealPlan = mealPlan;
+            LastFoodFailureReason = FoodSearchFailureReason.None;
+            LastFoodFailureDetails = "Nenhum";
             emergencyFoodCoroutine = StartCoroutine(
-                EmergencyFoodRoutine(source, path));
+                EatingRoutine(mealPlan));
             return true;
         }
+
+        LastFoodFailureReason = FoodSourceRegistry.Instance != null
+            ? failureReason
+            : FoodSearchFailureReason.NoFoodAvailable;
+        LastFoodFailureDetails = FoodSourceRegistry.Instance != null
+            ? failureDetails
+            : "FoodSourceRegistry não encontrado.";
 
         LifeCycleSettingsSO settings = LifeCycleSystem.Instance != null
             ? LifeCycleSystem.Instance.Settings
             : null;
-        float retry = settings != null ? settings.foodSearchRetryDelay : 3f;
+        float retry = failureReason == FoodSearchFailureReason.SearchDeferred
+            ? 0.15f
+            : (settings != null ? settings.foodSearchRetryDelay : 3f);
         nextPreventiveFoodSearchTime = Time.time + retry;
 
-        if (allowEmergencySources)
+        if (vitals != null && vitals.CurrentHunger <= 0f)
         {
             GameEvents.TriggerFloatingTextRequested(
-                "Sem alimento alcançável",
+                LastFoodFailureReason == FoodSearchFailureReason.FoodJourneyUnsafe
+                    ? "Comida distante demais"
+                    : "Sem alimento seguro",
                 transform.position,
                 Color.red);
         }
@@ -257,12 +295,15 @@ public class DuplicantBrain : MonoBehaviour
         return false;
     }
 
-    private IEnumerator EmergencyFoodRoutine(
-        IFoodSource source,
-        List<Vector2Int> path)
+    private IEnumerator EatingRoutine(MealPlan mealPlan)
     {
-        controller.CancelCurrentTaskExecution();
-        yield return taskRunner.ExecuteEmergencyEatingRoutine(source, path);
+        yield return taskRunner.ExecuteEatingRoutine(mealPlan);
+
+        if (taskRunner.LastMealConsumedPortions <= 0)
+        {
+            LastFoodFailureReason = FoodSearchFailureReason.FoodUnreachable;
+            LastFoodFailureDetails = taskRunner.LastMealDetails;
+        }
 
         LifeCycleSettingsSO settings = LifeCycleSystem.Instance != null
             ? LifeCycleSystem.Instance.Settings
@@ -270,5 +311,6 @@ public class DuplicantBrain : MonoBehaviour
         searchCooldown = settings != null ? settings.foodSearchRetryDelay : 3f;
         nextPreventiveFoodSearchTime = Time.time + searchCooldown;
         emergencyFoodCoroutine = null;
+        CurrentMealPlan = null;
     }
 }

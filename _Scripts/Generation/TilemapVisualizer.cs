@@ -14,6 +14,7 @@ public class TilemapVisualizer : MonoBehaviour
 
     [Header("Referências")]
     [SerializeField] private Tilemap targetTilemap;
+    [SerializeField] private GridLayer visualizedLayer = GridLayer.Terrain;
 
     [Header("Mapeamento de Tiles")]
     [SerializeField] private List<TileMapping> mappingList = new List<TileMapping>();
@@ -37,6 +38,7 @@ public class TilemapVisualizer : MonoBehaviour
         if (subscribedGridManager != null)
         {
             subscribedGridManager.OnTileChanged += OnTileChangedHandler;
+            subscribedGridManager.OnLayerTileChanged += OnLayerTileChangedHandler;
             subscribedGridManager.OnGridRebuilt += RenderFullGrid;
 
             // Se o grid já estiver pronto quando o Start rodar, desenha imediatamente
@@ -52,6 +54,7 @@ public class TilemapVisualizer : MonoBehaviour
         if (subscribedGridManager != null)
         {
             subscribedGridManager.OnTileChanged -= OnTileChangedHandler;
+            subscribedGridManager.OnLayerTileChanged -= OnLayerTileChangedHandler;
             subscribedGridManager.OnGridRebuilt -= RenderFullGrid;
         }
     }
@@ -67,6 +70,18 @@ public class TilemapVisualizer : MonoBehaviour
     }
 
     private void OnTileChangedHandler(int x, int y, TileType newType)
+    {
+        if (visualizedLayer != GridLayer.Terrain && visualizedLayer != GridLayer.Structure) return;
+        RenderCell(x, y, GridManager.Instance.GetTileType(x, y, visualizedLayer));
+    }
+
+    private void OnLayerTileChangedHandler(int x, int y, GridLayer layer, TileType newType)
+    {
+        if (layer != visualizedLayer) return;
+        RenderCell(x, y, newType);
+    }
+
+    private void RenderCell(int x, int y, TileType newType)
     {
         if (!TryGetTargetTilemap()) return;
 
@@ -88,7 +103,7 @@ public class TilemapVisualizer : MonoBehaviour
         {
             for (int y = 0; y < GridManager.Instance.height; y++)
             {
-                TileType type = GridManager.Instance.GetTileType(x, y);
+                TileType type = GridManager.Instance.GetTileType(x, y, visualizedLayer);
                 Vector3Int pos = new Vector3Int(x, y, 0);
 
                 if (tileDictionary.TryGetValue(type, out TileBase tileAsset))

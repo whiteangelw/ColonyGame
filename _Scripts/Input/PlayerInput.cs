@@ -6,7 +6,8 @@ public enum InputMode
     Dig,
     Build,
     Dismantle,
-    Haul
+    Haul,
+    Cancel
 }
 
 public class PlayerInput : MonoBehaviour
@@ -14,17 +15,20 @@ public class PlayerInput : MonoBehaviour
     [Header("Modo e Seleção Atual")]
     public InputMode currentMode { get; private set; } = InputMode.Dig;
     public TileType selectedBuildTile { get; private set; } = TileType.Ladder;
+    public GridLayer selectedBuildLayer { get; private set; } = GridLayer.Terrain;
 
     private bool isBuildMenuOpen = false;
 
     private void OnEnable()
     {
         GameEvents.OnBuildTileSelected += HandleBuildTileSelected;
+        GameEvents.OnBuildRecipeSelected += HandleBuildRecipeSelected;
     }
 
     private void OnDisable()
     {
         GameEvents.OnBuildTileSelected -= HandleBuildTileSelected;
+        GameEvents.OnBuildRecipeSelected -= HandleBuildRecipeSelected;
     }
 
     private void Update()
@@ -62,6 +66,13 @@ public class PlayerInput : MonoBehaviour
         if (Keyboard.current.zKey.wasPressedThisFrame)
         {
             SetInputMode(InputMode.Haul);
+            CloseBuildMenu();
+        }
+
+
+        if (Keyboard.current.xKey.wasPressedThisFrame)
+        {
+            SetInputMode(InputMode.Cancel);
             CloseBuildMenu();
         }
     }
@@ -129,7 +140,17 @@ public class PlayerInput : MonoBehaviour
     private void HandleBuildTileSelected(TileType tileType)
     {
         selectedBuildTile = tileType;
+        selectedBuildLayer = GridLayer.Terrain;
         SetInputMode(InputMode.Build);
         Debug.Log($"[PlayerInput] Selecionado para Construção: {selectedBuildTile}");
+    }
+
+
+    private void HandleBuildRecipeSelected(TileType tileType, GridLayer layer)
+    {
+        selectedBuildTile = tileType;
+        selectedBuildLayer = layer;
+        SetInputMode(InputMode.Build);
+        Debug.Log($"[PlayerInput] Construção: {tileType} na camada {layer}");
     }
 }

@@ -3,7 +3,10 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public class DuplicantStatusEffects : MonoBehaviour
 {
+    [Header("Estado em execução (não configure no prefab)")]
+    [Tooltip("Tempo restante do desconforto. O balanceamento fica no LifeCycleSettingsSO.")]
     [SerializeField] private float rawFoodDiscomfortRemaining;
+    [Tooltip("Penalidade atualmente aplicada. O balanceamento fica no LifeCycleSettingsSO.")]
     [SerializeField, Range(0f, 0.95f)] private float workPenaltyPercent;
 
     public bool HasRawFoodDiscomfort => rawFoodDiscomfortRemaining > 0f;
@@ -33,5 +36,11 @@ public class DuplicantStatusEffects : MonoBehaviour
     {
         rawFoodDiscomfortRemaining = Mathf.Max(0f, remainingDuration);
         workPenaltyPercent = Mathf.Clamp(penaltyPercent, 0f, 0.95f);
+    }
+
+    public void ClearAll()
+    {
+        rawFoodDiscomfortRemaining = 0f;
+        workPenaltyPercent = 0f;
     }
 }

@@ -13,6 +13,7 @@ public class ConstructionBlueprint : MonoBehaviour
     [Header("Configurações do Blueprint")]
     public Vector2Int gridPosition;
     public TileType targetTileType;
+    public GridLayer buildLayer = GridLayer.Terrain;
     public ResourceType requiredResource;
     public int requiredAmount;
 
@@ -28,6 +29,9 @@ public class ConstructionBlueprint : MonoBehaviour
 
     private Task currentTask;
     private bool applicationIsQuitting;
+    private bool footprintReserved;
+
+    public StructureFootprintDefinition Footprint { get; private set; }
 
     private void Start()
     {
@@ -36,19 +40,45 @@ public class ConstructionBlueprint : MonoBehaviour
         CheckTaskState();
     }
 
-    public void Initialize(Vector2Int pos, TileType tileType, ResourceType resource, int amount, float workRequired)
+    public void Initialize(Vector2Int pos, TileType tileType, ResourceType resource, int amount, float workRequired,
+        GridLayer layer = GridLayer.Terrain)
     {
         gridPosition = pos;
         targetTileType = tileType;
+        buildLayer = layer;
         requiredResource = resource;
         requiredAmount = amount;
         totalWorkRequired = workRequired;
+        Footprint = StructureFootprintSettings.Resolve(tileType);
 
         deliveredAmount = 0;
         reservedDeliveryAmount = 0;
         currentWorkDone = 0f;
 
         CheckTaskState();
+    }
+
+    public bool TryReserveFootprint()
+    {
+        if (footprintReserved)
+        {
+            return true;
+        }
+
+        if (GridManager.Instance == null)
+        {
+            return false;
+        }
+
+        Footprint = Footprint
+            ?? StructureFootprintSettings.Resolve(targetTileType);
+        footprintReserved = GridManager.Instance.RegisterFootprint(
+            this,
+            gridPosition,
+            Footprint,
+            true,
+            buildLayer);
+        return footprintReserved;
     }
 
     public void RestoreProgress(
@@ -231,6 +261,8 @@ public class ConstructionBlueprint : MonoBehaviour
     private void OnDestroy()
     {
         BlueprintManager.Instance?.UnregisterBlueprint(this);
+        GridManager.Instance?.UnregisterFootprint(this);
+        footprintReserved = false;
 
         bool shouldCleanRuntimeState =
             Application.isPlaying
@@ -287,9 +319,12 @@ public class ConstructionBlueprint : MonoBehaviour
             TaskManager.Instance?.RemoveTask(currentTask);
         }
 
+        GridManager.Instance?.UnregisterFootprint(this);
+        footprintReserved = false;
+
         // GridManager é o único responsável por criar estruturas associadas
         // ao tile, evitando instanciar um baú duas vezes.
-        GridManager.Instance?.SetTileType(gridPosition.x, gridPosition.y, targetTileType);
+        GridManager.Instance?.SetTileType(gridPosition.x, gridPosition.y, targetTileType, buildLayer);
 
         Destroy(gameObject);
     }

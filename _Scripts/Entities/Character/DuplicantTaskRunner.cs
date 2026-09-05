@@ -39,6 +39,8 @@ public class DuplicantTaskRunner : MonoBehaviour
     public int DiagnosticPathIndex { get; private set; }
     public int DiagnosticReplanCount { get; private set; }
     public int DiagnosticMaxReplans { get; private set; }
+    public int LastMealConsumedPortions { get; private set; }
+    public string LastMealDetails { get; private set; } = "Nenhuma refeição executada.";
 
     public Task ActiveTask => activeTask;
     public bool HasStorageReservation =>
@@ -115,25 +117,46 @@ public class DuplicantTaskRunner : MonoBehaviour
         yield return StartCoroutine(ExecuteGenericTaskRoutine(task, path));
     }
 
-    public IEnumerator ExecuteEmergencyEatingRoutine(
-        IFoodSource source,
-        List<Vector2Int> path)
+    public IEnumerator ExecuteEatingRoutine(MealPlan mealPlan)
     {
-        reservedFoodSource = source;
+        LastMealConsumedPortions = 0;
+        LastMealDetails = "Plano de refeição inválido.";
+        reservedFoodSource = mealPlan != null ? mealPlan.Source : null;
 
-        if (source == null || !source.HasFood)
+        if (mealPlan == null
+            || !IsFoodSourceValid(reservedFoodSource)
+            || reservedFoodSource.GetReservedPortionCount(controller) <= 0)
         {
             ReleaseFoodReservation();
             yield break;
         }
 
         yield return StartCoroutine(
-            FollowPathToInteractionPosition(source.GridPosition, path)
+            FollowPathToInteractionPosition(
+                reservedFoodSource.GridPosition,
+                mealPlan.Path,
+                mealPlan.InteractionPosition)
         );
 
-        if (!pathFollowSucceeded || reservedFoodSource == null
-            || !reservedFoodSource.HasFood)
+        if (!pathFollowSucceeded)
         {
+            LastMealDetails = "A posição reservada do baú ficou inalcançável.";
+            ReleaseFoodReservation();
+            controller.currentState = DuplicantController.WorkerState.Idle;
+            yield break;
+        }
+
+        if (!IsFoodSourceValid(reservedFoodSource))
+        {
+            LastMealDetails = "A fonte de alimento foi destruída ou desativada.";
+            ReleaseFoodReservation();
+            controller.currentState = DuplicantController.WorkerState.Idle;
+            yield break;
+        }
+
+        if (reservedFoodSource.GetReservedPortionCount(controller) <= 0)
+        {
+            LastMealDetails = "A reserva alimentar foi liberada antes do consumo.";
             ReleaseFoodReservation();
             controller.currentState = DuplicantController.WorkerState.Idle;
             yield break;
@@ -143,26 +166,60 @@ public class DuplicantTaskRunner : MonoBehaviour
         LifeCycleSettingsSO settings = LifeCycleSystem.Instance != null
             ? LifeCycleSystem.Instance.Settings
             : null;
-        yield return new WaitForSeconds(
-            settings != null ? settings.rawFoodEatingDuration : 2f
-        );
 
-        IFoodSource food = reservedFoodSource;
-        if (food != null && food.TryConsumeReservedPortion(
-                controller,
-                out float hungerRestored,
-                out bool isRawFood))
+        int consumedPortions = 0;
+        float totalRestored = 0f;
+        while (controller.Vitals != null
+            && controller.Vitals.CurrentHunger < mealPlan.HungerTarget
+            && IsFoodSourceValid(reservedFoodSource)
+            && reservedFoodSource.GetReservedPortionCount(controller) > 0)
         {
-            controller.Vitals?.RestoreHunger(hungerRestored);
+            yield return new WaitForSeconds(
+                settings != null
+                    ? settings.foodEatingDurationPerPortion
+                    : 1.2f);
+
+            IFoodSource food = reservedFoodSource;
+            if (!IsFoodSourceValid(food)
+                || !food.TryConsumeReservedPortion(
+                    controller,
+                    out float hungerRestored,
+                    out bool isRawFood))
+            {
+                LastMealDetails = IsFoodSourceValid(food)
+                    ? "A fonte recusou uma porção que ainda constava como reservada."
+                    : "A fonte foi invalidada durante o consumo.";
+                break;
+            }
+
+            controller.Vitals.RestoreHunger(hungerRestored);
             ApplyRawFoodEffectIfNeeded(isRawFood, settings);
+            totalRestored += hungerRestored;
+            consumedPortions++;
+        }
+
+        ReleaseFoodReservation();
+        if (consumedPortions > 0)
+        {
+            LastMealConsumedPortions = consumedPortions;
+            LastMealDetails = $"Consumiu {consumedPortions} porção(ões).";
             GameEvents.TriggerFloatingTextRequested(
-                $"Comeu alimento cru (+{hungerRestored:F0})",
+                $"Refeição: {consumedPortions}x (+{totalRestored:F0})",
                 transform.position,
                 Color.green);
         }
+        else if (LastMealDetails == "Plano de refeição inválido.")
+        {
+            LastMealDetails = "Nenhuma porção reservada pôde ser consumida.";
+        }
 
-        reservedFoodSource = null;
         controller.currentState = DuplicantController.WorkerState.Idle;
+    }
+
+    private static bool IsFoodSourceValid(IFoodSource source)
+    {
+        return source != null
+            && (!(source is Object unityObject) || unityObject != null);
     }
 
     private void ApplyRawFoodEffectIfNeeded(
@@ -1121,7 +1178,8 @@ public class DuplicantTaskRunner : MonoBehaviour
 
     private IEnumerator FollowPathToInteractionPosition(
         Vector2Int targetPosition,
-        List<Vector2Int> initialPath)
+        List<Vector2Int> initialPath,
+        Vector2Int? fixedInteractionPosition = null)
     {
         pathFollowSucceeded = false;
 
@@ -1148,11 +1206,9 @@ public class DuplicantTaskRunner : MonoBehaviour
             {
                 yield return movement.HandleFallingRoutine();
 
-                currentPath =
-                    TaskNavigationUtility.GetPathToInteractionPosition(
-                        controller.gridPosition,
-                        targetPosition
-                    );
+                currentPath = RecalculateInteractionPath(
+                    targetPosition,
+                    fixedInteractionPosition);
 
                 pathIndex = 0;
                 replanCount++;
@@ -1171,6 +1227,26 @@ public class DuplicantTaskRunner : MonoBehaviour
 
             if (pathIndex >= currentPath.Count)
             {
+                if (fixedInteractionPosition.HasValue
+                    && controller.gridPosition != fixedInteractionPosition.Value)
+                {
+                    currentPath = RecalculateInteractionPath(
+                        targetPosition,
+                        fixedInteractionPosition);
+                    pathIndex = 0;
+                    replanCount++;
+
+                    if (currentPath == null || replanCount > maxReplans)
+                    {
+                        RecordFailure(
+                            TaskFailureReason.StorageUnreachable,
+                            "A posição reservada de interação ficou inacessível.");
+                        yield break;
+                    }
+
+                    continue;
+                }
+
                 pathFollowSucceeded = true;
                 yield break;
             }
@@ -1179,11 +1255,9 @@ public class DuplicantTaskRunner : MonoBehaviour
 
             if (!CanTraverseTo(nextTile))
             {
-                currentPath =
-                    TaskNavigationUtility.GetPathToInteractionPosition(
-                        controller.gridPosition,
-                        targetPosition
-                    );
+                currentPath = RecalculateInteractionPath(
+                    targetPosition,
+                    fixedInteractionPosition);
 
                 pathIndex = 0;
                 replanCount++;
@@ -1219,11 +1293,9 @@ public class DuplicantTaskRunner : MonoBehaviour
 
             if (!movement.LastMoveSucceeded)
             {
-                currentPath =
-                    TaskNavigationUtility.GetPathToInteractionPosition(
-                        controller.gridPosition,
-                        targetPosition
-                    );
+                currentPath = RecalculateInteractionPath(
+                    targetPosition,
+                    fixedInteractionPosition);
 
                 pathIndex = 0;
                 replanCount++;
@@ -1246,6 +1318,30 @@ public class DuplicantTaskRunner : MonoBehaviour
 
             pathIndex++;
         }
+    }
+
+    private List<Vector2Int> RecalculateInteractionPath(
+        Vector2Int targetPosition,
+        Vector2Int? fixedInteractionPosition)
+    {
+        if (fixedInteractionPosition.HasValue)
+        {
+            if (controller.gridPosition == fixedInteractionPosition.Value)
+            {
+                return new List<Vector2Int>();
+            }
+
+            return PathfindingAStar.Instance?.FindPath(
+                controller.gridPosition,
+                fixedInteractionPosition.Value,
+                controller.capabilityProfile);
+        }
+
+        return TaskNavigationUtility.GetPathToInteractionPosition(
+            controller.gridPosition,
+            targetPosition,
+            true,
+            controller.capabilityProfile);
     }
 
     private List<Vector2Int> RecalculateTaskPath(Task task)

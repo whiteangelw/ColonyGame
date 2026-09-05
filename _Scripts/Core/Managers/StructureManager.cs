@@ -14,6 +14,13 @@ public class StructureManager : Singleton<StructureManager>
     public PrintingPod GetPrintingPodAt(Vector2Int position)
     {
         activePrintingPods.TryGetValue(position, out PrintingPod printingPod);
+
+        if (printingPod == null && GridManager.Instance != null)
+        {
+            printingPod = GridManager.Instance.GetOccupantAt(position)
+                as PrintingPod;
+        }
+
         return printingPod;
     }
 
@@ -26,10 +33,27 @@ public class StructureManager : Singleton<StructureManager>
 
         activePrintingPods[position] = printingPod;
         printingPod.SetGridPosition(position);
+
+        if (GridManager.Instance != null
+            && !GridManager.Instance.RegisterFootprint(
+                printingPod,
+                position,
+                StructureFootprintSettings.Resolve(TileType.PrintingPod),
+                false))
+        {
+            Debug.LogError(
+                $"[StructureManager] Área do PrintingPod em {position} está ocupada.",
+                printingPod);
+        }
     }
 
     public void UnregisterPrintingPod(Vector2Int position)
     {
+        if (activePrintingPods.TryGetValue(position, out PrintingPod printingPod))
+        {
+            GridManager.Instance?.UnregisterFootprint(printingPod);
+        }
+
         activePrintingPods.Remove(position);
     }
 
@@ -47,13 +71,26 @@ public class StructureManager : Singleton<StructureManager>
         }
 
         storage.SetGridPosition(pos);
+        if (GridManager.Instance != null
+            && !GridManager.Instance.RegisterFootprint(
+                storage,
+                pos,
+                StructureFootprintSettings.Resolve(TileType.Chest),
+                false))
+        {
+            Debug.LogError(
+                $"[StructureManager] Área do baú em {pos} está ocupada.",
+                storage);
+        }
+
         QueueExistingGroundItems();
     }
 
     public void UnregisterStorage(Vector2Int pos)
     {
-        if (activeStorages.ContainsKey(pos))
+        if (activeStorages.TryGetValue(pos, out StorageStructure storage))
         {
+            GridManager.Instance?.UnregisterFootprint(storage);
             activeStorages.Remove(pos);
         }
     }
@@ -61,6 +98,13 @@ public class StructureManager : Singleton<StructureManager>
     public StorageStructure GetStorageAt(Vector2Int position)
     {
         activeStorages.TryGetValue(position, out var storage);
+
+        if (storage == null && GridManager.Instance != null)
+        {
+            storage = GridManager.Instance.GetOccupantAt(position)
+                as StorageStructure;
+        }
+
         return storage;
     }
 
@@ -101,6 +145,7 @@ public class StructureManager : Singleton<StructureManager>
         {
             if (storage != null)
             {
+                GridManager.Instance?.UnregisterFootprint(storage);
                 storage.gameObject.SetActive(false);
                 Destroy(storage.gameObject);
             }
@@ -110,6 +155,7 @@ public class StructureManager : Singleton<StructureManager>
         {
             if (printingPod != null)
             {
+                GridManager.Instance?.UnregisterFootprint(printingPod);
                 printingPod.SetOperational(false);
                 printingPod.gameObject.SetActive(false);
                 Destroy(printingPod.gameObject);
@@ -365,7 +411,7 @@ public class StructureManager : Singleton<StructureManager>
 
         if (printingPod != null)
         {
-            DismantlePrintingPod(position, printingPod);
+            DismantlePrintingPod(printingPod.GridPosition, printingPod);
             return;
         }
 
@@ -373,6 +419,8 @@ public class StructureManager : Singleton<StructureManager>
 
         // A estrutura já foi marcada quando a tarefa foi criada.
         if (storage == null) return;
+
+        position = storage.GridPosition;
 
         if (!storage.IsBeingDismantled)
         {

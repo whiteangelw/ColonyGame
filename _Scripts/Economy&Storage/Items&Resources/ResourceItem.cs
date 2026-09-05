@@ -1,7 +1,8 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 [RequireComponent(typeof(SpriteRenderer), typeof(Rigidbody2D), typeof(BoxCollider2D))]
-public class ResourceItem : MonoBehaviour
+public class ResourceItem : MonoBehaviour, IFoodSource
 {
     public ResourceType type;
     public int amount = 1;
@@ -12,6 +13,8 @@ public class ResourceItem : MonoBehaviour
     private GridManager gridManager;
     private bool hasQueuedAfterSettling;
     private DuplicantTaskRunner reservedBy;
+    private DuplicantController foodReservedBy;
+    private int reservedFoodPortions;
     private float nextGroundCheckTime;
     private Vector3 previousPhysicsPosition;
 
@@ -20,13 +23,54 @@ public class ResourceItem : MonoBehaviour
 
     public bool IsReadyForHaul => hasQueuedAfterSettling
         && amount > 0
+        && foodReservedBy == null
         && gameObject.activeInHierarchy;
+    public Vector2Int GridPosition => gridManager != null
+        ? gridManager.WorldToGridPosition(transform.position)
+        : Vector2Int.zero;
+    public FoodSourceKind SourceKind => FoodSourceKind.GroundItem;
+    public bool IsEmergencyOnly
+    {
+        get
+        {
+            ItemDataSO data = GetItemData();
+            return data == null || !data.allowPreventiveConsumption;
+        }
+    }
+    public bool HasFood
+    {
+        get
+        {
+            ItemDataSO data = GetItemData();
+            return hasQueuedAfterSettling
+                && gameObject.activeInHierarchy
+                && reservedBy == null
+                && amount - reservedFoodPortions > 0
+                && data != null
+                && data.isFood;
+        }
+    }
+
+    private void OnEnable()
+    {
+        FoodSourceRegistry.Instance?.Register(this);
+    }
+
+    private void OnDisable()
+    {
+        FoodSourceRegistry.Instance?.Unregister(this);
+        foodReservedBy = null;
+        reservedFoodPortions = 0;
+    }
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
         itemCollider = GetComponent<BoxCollider2D>();
         spriteRenderer = GetComponent<SpriteRenderer>();
+        gridManager = GridManager.Instance != null
+            ? GridManager.Instance
+            : FindFirstObjectByType<GridManager>();
 
         rb.gravityScale = 1.5f;
         rb.freezeRotation = true;
@@ -42,7 +86,10 @@ public class ResourceItem : MonoBehaviour
 
     private void Start()
     {
-        gridManager = FindFirstObjectByType<GridManager>();
+        if (gridManager == null)
+        {
+            gridManager = FindFirstObjectByType<GridManager>();
+        }
     }
 
     public void Initialize(ResourceType resourceType, Sprite icon, int count = 1)
@@ -51,6 +98,8 @@ public class ResourceItem : MonoBehaviour
         this.amount = Mathf.Max(1, count);
         hasQueuedAfterSettling = false;
         reservedBy = null;
+        foodReservedBy = null;
+        reservedFoodPortions = 0;
         nextGroundCheckTime = Time.time + Random.Range(0f, GroundCheckInterval);
         previousPhysicsPosition = transform.position;
 
@@ -85,6 +134,8 @@ public class ResourceItem : MonoBehaviour
         amount = Mathf.Max(1, count);
         hasQueuedAfterSettling = true;
         reservedBy = null;
+        foodReservedBy = null;
+        reservedFoodPortions = 0;
         nextGroundCheckTime = Time.time + GroundCheckInterval;
         previousPhysicsPosition = transform.position;
 
@@ -112,7 +163,8 @@ public class ResourceItem : MonoBehaviour
             return false;
         }
 
-        takenAmount = Mathf.Min(requestedAmount, amount);
+        int available = amount - reservedFoodPortions;
+        takenAmount = Mathf.Min(requestedAmount, Mathf.Max(0, available));
         amount -= takenAmount;
 
         return takenAmount > 0;
@@ -128,7 +180,7 @@ public class ResourceItem : MonoBehaviour
 
     public bool TryReserve(DuplicantTaskRunner runner)
     {
-        if (runner == null || !IsReadyForHaul)
+        if (runner == null || !IsReadyForHaul || foodReservedBy != null)
         {
             return false;
         }
@@ -150,6 +202,104 @@ public class ResourceItem : MonoBehaviour
         }
     }
 
+    public void CollectFoodOptions(List<FoodOption> results)
+    {
+        ItemDataSO data = GetItemData();
+        int available = amount - reservedFoodPortions;
+        if (results == null || !HasFood || data == null || available <= 0)
+        {
+            return;
+        }
+
+        results.Add(new FoodOption
+        {
+            resourceType = type,
+            availablePortions = available,
+            hungerRestoredPerPortion = data.hungerRestored,
+            isRawFood = data.isRawFood,
+            quality = data.foodQuality
+        });
+    }
+
+    public bool TryReserveMeal(
+        DuplicantController duplicant,
+        ResourceType foodType,
+        int requestedPortions,
+        out int reservedAmount)
+    {
+        reservedAmount = 0;
+        if (duplicant == null || foodType != type || requestedPortions <= 0
+            || reservedBy != null
+            || (foodReservedBy != null && foodReservedBy != duplicant))
+        {
+            return false;
+        }
+
+        if (foodReservedBy == duplicant)
+        {
+            reservedAmount = reservedFoodPortions;
+            return reservedAmount > 0;
+        }
+
+        ItemDataSO data = GetItemData();
+        if (!IsReadyForHaul || data == null || !data.isFood) return false;
+
+        reservedAmount = Mathf.Min(requestedPortions, amount);
+        if (reservedAmount <= 0) return false;
+
+        foodReservedBy = duplicant;
+        reservedFoodPortions = reservedAmount;
+        return true;
+    }
+
+    public int GetReservedPortionCount(DuplicantController duplicant)
+    {
+        return foodReservedBy == duplicant ? reservedFoodPortions : 0;
+    }
+
+    public bool TryConsumeReservedPortion(
+        DuplicantController duplicant,
+        out float hungerRestored,
+        out bool isRawFood)
+    {
+        hungerRestored = 0f;
+        isRawFood = false;
+        ItemDataSO data = GetItemData();
+
+        if (duplicant == null || foodReservedBy != duplicant
+            || reservedFoodPortions <= 0 || amount <= 0
+            || data == null || !data.isFood)
+        {
+            return false;
+        }
+
+        amount--;
+        reservedFoodPortions--;
+        hungerRestored = Mathf.Max(0f, data.hungerRestored);
+        isRawFood = data.isRawFood;
+
+        if (reservedFoodPortions <= 0) foodReservedBy = null;
+        StockpileManager.Instance?.RequestRefresh();
+
+        if (amount <= 0) Recycle();
+        return true;
+    }
+
+    public void ReleaseReservation(DuplicantController duplicant)
+    {
+        if (foodReservedBy != duplicant) return;
+        foodReservedBy = null;
+        reservedFoodPortions = 0;
+        if (amount > 0) TaskManager.Instance?.AddHaulTask(this);
+    }
+
+    private ItemDataSO GetItemData()
+    {
+        return ItemSpawner.Instance != null
+            ? ItemSpawner.Instance.GetItemData(type)
+            : null;
+    }
+
     public void Recycle()
     {
         if (!gameObject.activeInHierarchy)
@@ -159,6 +309,8 @@ public class ResourceItem : MonoBehaviour
 
         amount = 0;
         reservedBy = null;
+        foodReservedBy = null;
+        reservedFoodPortions = 0;
 
         if (rb != null)
         {

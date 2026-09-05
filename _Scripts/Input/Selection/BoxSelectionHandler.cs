@@ -39,6 +39,18 @@ public class BoxSelectionHandler : MonoBehaviour
         // --- CLIQUE ESQUERDO ---
         if (Mouse.current.leftButton.wasPressedThisFrame)
         {
+            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+                return;
+
+            // Cancelar nunca abre a UI da estrutura: o clique pertence à ferramenta.
+            if (playerInput.currentMode == InputMode.Cancel)
+            {
+                isDraggingLeft = true;
+                dragStartGridPos = currentGridPos;
+                dragEndGridPos = currentGridPos;
+                return;
+            }
+
             // 1. Tenta interagir primeiro com o Baú no Mundo (Física 2D)
             Collider2D hit = Physics2D.OverlapPoint(mouseWorldPos);
             if (hit != null && hit.TryGetComponent<StorageStructure>(out var storageByPhysics))
@@ -56,11 +68,6 @@ public class BoxSelectionHandler : MonoBehaviour
             }
 
             // 3. Se o clique FOI sobre um elemento de UI (botão, painel, etc.), encerra aqui sem criar caixa de seleção
-            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
-            {
-                return;
-            }
-
             // 4. Lógica do modo Haul (Transporte)
             if (playerInput.currentMode == InputMode.Haul)
             {
@@ -142,6 +149,20 @@ public class BoxSelectionHandler : MonoBehaviour
             return;
         }
 
+        if (playerInput.currentMode == InputMode.Cancel)
+        {
+            for (int x = minX; x <= maxX; x++)
+            for (int y = minY; y <= maxY; y++)
+            {
+                Vector2Int position = new Vector2Int(x, y);
+                // Blueprint primeiro: seu OnDestroy também remove a tarefa e devolve materiais.
+                bool removedBlueprint = BlueprintManager.Instance?.CancelBlueprintAt(position) ?? false;
+                if (!removedBlueprint)
+                    TaskManager.Instance?.CancelTasksAt(position);
+            }
+            return;
+        }
+
         for (int x = minX; x <= maxX; x++)
         {
             for (int y = minY; y <= maxY; y++)
@@ -160,6 +181,16 @@ public class BoxSelectionHandler : MonoBehaviour
                 }
                 else if (playerInput.currentMode == InputMode.Dismantle)
                 {
+                    IDismantlable occupiedStructure =
+                        GridManager.Instance.GetOccupantAt(
+                            new Vector2Int(x, y)) as IDismantlable;
+
+                    if (occupiedStructure != null)
+                    {
+                        occupiedStructure.Dismantle();
+                        continue;
+                    }
+
                     if (tile.type == TileType.Chest
                         || tile.type == TileType.Ladder
                         || tile.type == TileType.PrintingPod)
@@ -174,10 +205,19 @@ public class BoxSelectionHandler : MonoBehaviour
     private void ProcessBuildSelection(int minX, int maxX, int minY, int maxY)
     {
         TileType buildTile = playerInput.selectedBuildTile;
+        GridLayer buildLayer = playerInput.selectedBuildLayer;
+        StructureFootprintDefinition footprint =
+            StructureFootprintSettings.Resolve(buildTile);
 
-        if (buildTile == TileType.PrintingPod)
+        if (footprint.IsMultiCell)
         {
-            ProcessSingleMachineSelection(minX, maxX, minY, maxY);
+            ProcessSingleStructureSelection(
+                minX,
+                maxX,
+                minY,
+                maxY,
+                buildTile,
+                buildLayer);
             return;
         }
 
@@ -189,9 +229,13 @@ public class BoxSelectionHandler : MonoBehaviour
         {
             for (int y = minY; y <= maxY; y++)
             {
-                Tile tile = GridManager.Instance.GetTile(x, y);
-                // Valida se o tile está livre e não possui outro blueprint ativo
-                if (tile != null && tile.type == TileType.Empty && TaskManager.Instance?.GetTaskAt(new Vector2Int(x, y)) == null)
+                Vector2Int position = new Vector2Int(x, y);
+                if (BlueprintManager.Instance != null
+                    && BlueprintManager.Instance.CanCreateBlueprint(
+                        position,
+                        buildTile,
+                        buildLayer,
+                        out _))
                 {
                     validTilesCount++;
                 }
@@ -216,22 +260,28 @@ public class BoxSelectionHandler : MonoBehaviour
         {
             for (int y = minY; y <= maxY; y++)
             {
-                Tile tile = GridManager.Instance.GetTile(x, y);
                 Vector2Int pos = new Vector2Int(x, y);
 
-                if (tile != null && tile.type == TileType.Empty && TaskManager.Instance?.GetTaskAt(pos) == null)
+                if (BlueprintManager.Instance != null
+                    && BlueprintManager.Instance.CanCreateBlueprint(
+                        pos,
+                        buildTile,
+                        buildLayer,
+                        out _))
                 {
-                    BlueprintManager.Instance?.CreateBlueprint(pos, buildTile);
+                    BlueprintManager.Instance?.CreateBlueprint(pos, buildTile, buildLayer);
                 }
             }
         }
     }
 
-    private void ProcessSingleMachineSelection(
+    private void ProcessSingleStructureSelection(
         int minX,
         int maxX,
         int minY,
-        int maxY)
+        int maxY,
+        TileType buildTile,
+        GridLayer buildLayer)
     {
         if (BlueprintManager.Instance == null)
         {
@@ -245,11 +295,10 @@ public class BoxSelectionHandler : MonoBehaviour
             return;
         }
 
-        if (!BlueprintManager.Instance.CanCreateBlueprint(
-                TileType.PrintingPod))
+        if (!BlueprintManager.Instance.CanCreateBlueprint(buildTile))
         {
             ShowMachinePlacementMessage(
-                "Já existe um Printing Pod ou um projeto dele.",
+                "Esta estrutura única já existe ou possui um blueprint.",
                 minX,
                 maxX,
                 minY,
@@ -258,10 +307,8 @@ public class BoxSelectionHandler : MonoBehaviour
             return;
         }
 
-        ResourceType resource = BuildingCosts.GetRequiredResource(
-            TileType.PrintingPod
-        );
-        int cost = BuildingCosts.GetCost(TileType.PrintingPod);
+        ResourceType resource = BuildingCosts.GetRequiredResource(buildTile);
+        int cost = BuildingCosts.GetCost(buildTile);
 
         if (StockpileManager.Instance != null
             && !StockpileManager.Instance.HasResource(resource, cost))
@@ -281,19 +328,20 @@ public class BoxSelectionHandler : MonoBehaviour
             for (int y = minY; y <= maxY; y++)
             {
                 Vector2Int position = new Vector2Int(x, y);
-                Tile tile = GridManager.Instance.GetTile(position);
-
-                if (tile == null
-                    || tile.type != TileType.Empty
-                    || TaskManager.Instance?.GetTaskAt(position) != null)
+                if (!BlueprintManager.Instance.CanCreateBlueprint(
+                        position,
+                        buildTile,
+                        buildLayer,
+                        out _))
                 {
                     continue;
                 }
 
                 ConstructionBlueprint blueprint =
                     BlueprintManager.Instance.CreateBlueprint(
-                    position,
-                    TileType.PrintingPod
+                        position,
+                        buildTile,
+                        buildLayer
                 );
 
                 if (blueprint == null)
@@ -311,8 +359,17 @@ public class BoxSelectionHandler : MonoBehaviour
             }
         }
 
+        Vector2Int selectedPosition = new Vector2Int(minX, minY);
+        BlueprintManager.Instance.CanCreateBlueprint(
+            selectedPosition,
+            buildTile,
+            buildLayer,
+            out string failureReason);
+
         ShowMachinePlacementMessage(
-            "Escolha uma célula vazia e sem outra tarefa.",
+            string.IsNullOrWhiteSpace(failureReason)
+                ? "Escolha uma área livre e com apoio suficiente."
+                : failureReason,
             minX,
             maxX,
             minY,

@@ -9,6 +9,7 @@ public class SaveGameService : MonoBehaviour
 {
     public static SaveGameService Instance { get; private set; }
 
+    // Campos de camada usam zero como padrão, mantendo compatibilidade com saves v1.
     private const int CurrentSaveVersion = 1;
     public const int MaxSaveSlots = 3;
     private const string SaveDirectoryName = "Saves";
@@ -368,6 +369,8 @@ public class SaveGameService : MonoBehaviour
                     x = x,
                     y = y,
                     tileType = (int)tile.type,
+                    backWallTileType = (int)tile.backWallType,
+                    decorationTileType = (int)tile.decorationType,
                     fogState = (int)tile.fogState,
                     liquidAmount = tile.liquidAmount
                 });
@@ -438,6 +441,7 @@ public class SaveGameService : MonoBehaviour
                 x = blueprint.gridPosition.x,
                 y = blueprint.gridPosition.y,
                 targetTileType = (int)blueprint.targetTileType,
+                buildLayer = (int)blueprint.buildLayer,
                 requiredResource = (int)blueprint.requiredResource,
                 requiredAmount = blueprint.requiredAmount,
                 deliveredAmount = blueprint.deliveredAmount,
@@ -739,7 +743,9 @@ public class SaveGameService : MonoBehaviour
                 tile.y,
                 (TileType)tile.tileType,
                 (FogState)tile.fogState,
-                tile.liquidAmount
+                tile.liquidAmount,
+                (TileType)tile.backWallTileType,
+                (TileType)tile.decorationTileType
             );
         }
 
@@ -812,7 +818,8 @@ public class SaveGameService : MonoBehaviour
                 savedBlueprint.requiredAmount,
                 savedBlueprint.totalWorkRequired,
                 savedBlueprint.deliveredAmount,
-                savedBlueprint.currentWorkDone
+                savedBlueprint.currentWorkDone,
+                (GridLayer)savedBlueprint.buildLayer
             );
         }
     }

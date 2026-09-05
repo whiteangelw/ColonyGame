@@ -387,6 +387,7 @@ public class DevModeManager : Singleton<DevModeManager>
             selectedDuplicant.GetComponent<DuplicantVitals>();
         DuplicantStatusEffects statusEffects =
             selectedDuplicant.GetComponent<DuplicantStatusEffects>();
+        DuplicantBrain brain = selectedDuplicant.Brain;
         Task task = selectedDuplicant.currentTask;
 
         GUILayout.Label($"Nome: {selectedDuplicant.name}");
@@ -478,6 +479,32 @@ public class DevModeManager : Singleton<DevModeManager>
         }
 
         GUILayout.Space(8f);
+        GUILayout.Label("PLANO DE REFEIÇÃO");
+        MealPlan mealPlan = brain != null ? brain.CurrentMealPlan : null;
+        if (mealPlan != null)
+        {
+            bool sourceValid = mealPlan.Source != null;
+            if (mealPlan.Source is Object sourceObject)
+            {
+                sourceValid = sourceObject != null;
+            }
+            GUILayout.Label(
+                $"Fonte: {(sourceValid ? mealPlan.Source.SourceKind.ToString() : "Invalidada")}");
+            GUILayout.Label($"Alimento: {mealPlan.FoodType}");
+            GUILayout.Label($"Porções reservadas: {mealPlan.ReservedPortions}");
+            GUILayout.Label($"Interação: {mealPlan.InteractionPosition}");
+            GUILayout.Label($"Meta de fome: {mealPlan.HungerTarget:F1}");
+            GUILayout.Label($"Viagem estimada: {mealPlan.EstimatedTravelSeconds:F1}s");
+            GUILayout.Label($"Fome na chegada: {mealPlan.EstimatedHungerOnArrival:F1}");
+        }
+        else if (brain != null)
+        {
+            GUILayout.Label("Nenhum plano ativo.");
+            GUILayout.Label($"Último motivo: {brain.LastFoodFailureReason}");
+            GUILayout.Label($"Detalhes: {brain.LastFoodFailureDetails}");
+        }
+
+        GUILayout.Space(8f);
         GUILayout.Label("EFEITOS");
         if (statusEffects != null && statusEffects.HasRawFoodDiscomfort)
         {
@@ -491,6 +518,11 @@ public class DevModeManager : Singleton<DevModeManager>
         else
         {
             GUILayout.Label("Nenhum efeito ativo.");
+        }
+
+        if (statusEffects != null && GUILayout.Button("Limpar efeitos"))
+        {
+            statusEffects.ClearAll();
         }
 
         if (runner != null)

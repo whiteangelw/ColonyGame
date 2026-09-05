@@ -156,6 +156,22 @@ public class DuplicantVitals : MonoBehaviour
         OnVitalsChanged?.Invoke(this);
     }
 
+    public float EstimateHungerAfterSeconds(
+        float seconds,
+        LifeCycleSettingsSO settings = null)
+    {
+        LifeCycleSettingsSO effectiveSettings = settings ?? lastSettings;
+        if (effectiveSettings == null || seconds <= 0f) return currentHunger;
+
+        float multiplier = lifeProfile != null
+            ? lifeProfile.hungerDrainMultiplier
+            : 1f;
+        return Mathf.Max(
+            0f,
+            currentHunger
+                - effectiveSettings.hungerDrain * multiplier * seconds);
+    }
+
     public void Restore(float energy, float hunger, bool hasSavedVitals)
     {
         lifeProfile = controller != null ? controller.lifeProfile : lifeProfile;

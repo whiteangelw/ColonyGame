@@ -34,22 +34,41 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
     {
         if (GridManager.Instance == null) return;
 
-        Tile tile = GridManager.Instance.GetTile(x, y);
-        if (tile == null || tile.type == TileType.Empty) return;
+        Vector2Int position = new Vector2Int(x, y);
+        UnityEngine.Object occupant = GridManager.Instance.GetOccupantAt(position);
+        StorageStructure occupiedStorage = occupant as StorageStructure;
+        PrintingPod occupiedPrintingPod = occupant as PrintingPod;
 
-        if (tile.type == TileType.Chest
+        if (occupiedStorage != null)
+        {
+            position = occupiedStorage.GridPosition;
+        }
+        else if (occupiedPrintingPod != null)
+        {
+            position = occupiedPrintingPod.GridPosition;
+        }
+
+        Tile tile = GridManager.Instance.GetTile(x, y);
+        bool hasWorldStructure = occupiedStorage != null
+            || occupiedPrintingPod != null;
+
+        if (tile == null || (tile.type == TileType.Empty && !hasWorldStructure))
+        {
+            return;
+        }
+
+        if (hasWorldStructure
+            || tile.type == TileType.Chest
             || tile.type == TileType.Ladder
             || tile.type == TileType.PrintingPod)
         {
-            Vector2Int position = new Vector2Int(x, y);
-
             if (TaskManager.Instance == null
                 || TaskManager.Instance.GetTaskAt(position) != null)
             {
                 return;
             }
 
-            if (tile.type == TileType.Chest)
+            if (occupiedStorage != null || tile.type == TileType.Chest)
             {
                 StorageStructure storage =
                     StructureManager.Instance?.GetStorageAt(position);
@@ -70,6 +89,23 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
     public void ExecuteDismantleAt(int x, int y)
     {
         if (GridManager.Instance == null) return;
+
+        Vector2Int position = new Vector2Int(x, y);
+        UnityEngine.Object occupant = GridManager.Instance.GetOccupantAt(position);
+
+        if (occupant is StorageStructure storage)
+        {
+            StructureManager.Instance?.DismantleStructureAt(
+                storage.GridPosition);
+            return;
+        }
+
+        if (occupant is PrintingPod printingPod)
+        {
+            StructureManager.Instance?.DismantleStructureAt(
+                printingPod.GridPosition);
+            return;
+        }
 
         Tile tile = GridManager.Instance.GetTile(x, y);
         if (tile == null) return;

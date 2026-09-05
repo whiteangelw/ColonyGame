@@ -11,6 +11,23 @@ public class DuplicantMovement : MonoBehaviour
     private void Awake()
     {
         controller = GetComponent<DuplicantController>();
+        ConfigureGridDrivenPhysics();
+    }
+
+    private void ConfigureGridDrivenPhysics()
+    {
+        if (!TryGetComponent(out Rigidbody2D body))
+        {
+            return;
+        }
+
+        // A posição é dirigida pelo grid. Um corpo dinâmico permitiria que
+        // colliders de seleção empurrassem o duplicant para fora da rota.
+        body.bodyType = RigidbodyType2D.Kinematic;
+        body.gravityScale = 0f;
+        body.linearVelocity = Vector2.zero;
+        body.angularVelocity = 0f;
+        body.constraints |= RigidbodyConstraints2D.FreezeRotation;
     }
 
     /// <summary>

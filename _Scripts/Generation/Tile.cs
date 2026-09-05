@@ -16,6 +16,14 @@ public enum TileType
     PrintingPod // Máquina que libera ofertas periódicas de recompensa
 }
 
+public enum GridLayer
+{
+    Terrain = 0,
+    BackWall = 1,
+    Structure = 2,
+    Decoration = 3
+}
+
 public enum FogState
 {
     Unexplored, // 100% Escuro (Preto)
@@ -28,6 +36,8 @@ public class Tile
     public int x;
     public int y;
     public TileType type;
+    public TileType backWallType = TileType.Empty;
+    public TileType decorationType = TileType.Empty;
     public bool isPassable;
     public FogState fogState = FogState.Unexplored;
 

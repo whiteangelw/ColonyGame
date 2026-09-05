@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 [DisallowMultipleComponent]
 public class HarvestableFoodSource : MonoBehaviour, IFoodSource
@@ -7,6 +8,7 @@ public class HarvestableFoodSource : MonoBehaviour, IFoodSource
     [SerializeField, Min(0)] private int availablePortions;
 
     private DuplicantController reservedBy;
+    private int reservedPortions;
 
     public string FloraId => definition != null ? definition.floraId : string.Empty;
     public int AvailablePortions => availablePortions;
@@ -14,7 +16,8 @@ public class HarvestableFoodSource : MonoBehaviour, IFoodSource
         ? GridManager.Instance.WorldToGridPosition(transform.position)
         : Vector2Int.zero;
     public bool IsEmergencyOnly => true;
-    public bool HasFood => availablePortions > 0;
+    public FoodSourceKind SourceKind => FoodSourceKind.Flora;
+    public bool HasFood => availablePortions - reservedPortions > 0;
 
     private void OnEnable()
     {
@@ -24,6 +27,7 @@ public class HarvestableFoodSource : MonoBehaviour, IFoodSource
     private void OnDisable()
     {
         reservedBy = null;
+        reservedPortions = 0;
         FoodSourceRegistry.Instance?.Unregister(this);
     }
 
@@ -35,16 +39,59 @@ public class HarvestableFoodSource : MonoBehaviour, IFoodSource
             : (definition != null ? definition.initialPortions : 1);
     }
 
-    public bool TryReservePortion(DuplicantController duplicant)
+    public void CollectFoodOptions(List<FoodOption> results)
     {
-        if (duplicant == null || !HasFood
+        if (results == null || !HasFood) return;
+
+        results.Add(new FoodOption
+        {
+            resourceType = definition != null
+                ? definition.foodResourceType
+                : ResourceType.WildBerry,
+            availablePortions = availablePortions - reservedPortions,
+            hungerRestoredPerPortion = definition != null
+                ? definition.hungerRestoredPerPortion
+                : 25f,
+            isRawFood = definition == null || definition.isRawFood,
+            quality = definition != null ? definition.foodQuality : 0
+        });
+    }
+
+    public bool TryReserveMeal(
+        DuplicantController duplicant,
+        ResourceType foodType,
+        int requestedPortions,
+        out int reservedAmount)
+    {
+        reservedAmount = 0;
+        if (duplicant == null || requestedPortions <= 0
             || (reservedBy != null && reservedBy != duplicant))
         {
             return false;
         }
 
+        ResourceType availableType = definition != null
+            ? definition.foodResourceType
+            : ResourceType.WildBerry;
+        if (availableType != foodType) return false;
+
+        if (reservedBy == duplicant)
+        {
+            reservedAmount = reservedPortions;
+            return reservedAmount > 0;
+        }
+
+        reservedAmount = Mathf.Min(requestedPortions, availablePortions);
+        if (reservedAmount <= 0) return false;
+
         reservedBy = duplicant;
+        reservedPortions = reservedAmount;
         return true;
+    }
+
+    public int GetReservedPortionCount(DuplicantController duplicant)
+    {
+        return reservedBy == duplicant ? reservedPortions : 0;
     }
 
     public bool TryConsumeReservedPortion(
@@ -55,16 +102,18 @@ public class HarvestableFoodSource : MonoBehaviour, IFoodSource
         hungerRestored = 0f;
         isRawFood = definition == null || definition.isRawFood;
 
-        if (duplicant == null || reservedBy != duplicant || !HasFood)
+        if (duplicant == null || reservedBy != duplicant
+            || reservedPortions <= 0 || availablePortions <= 0)
         {
             return false;
         }
 
         availablePortions--;
+        reservedPortions--;
         hungerRestored = definition != null
             ? definition.hungerRestoredPerPortion
             : 25f;
-        reservedBy = null;
+        if (reservedPortions <= 0) reservedBy = null;
 
         if (availablePortions <= 0)
         {
@@ -80,6 +129,7 @@ public class HarvestableFoodSource : MonoBehaviour, IFoodSource
         if (reservedBy == duplicant)
         {
             reservedBy = null;
+            reservedPortions = 0;
         }
     }
 }

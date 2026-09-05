@@ -36,6 +36,8 @@ public class TileSaveData
     public int x;
     public int y;
     public int tileType;
+    public int backWallTileType;
+    public int decorationTileType;
     public int fogState;
     public float liquidAmount;
 }
@@ -65,6 +67,7 @@ public class BlueprintSaveData
     public int x;
     public int y;
     public int targetTileType;
+    public int buildLayer;
     public int requiredResource;
     public int requiredAmount;
     public int deliveredAmount;

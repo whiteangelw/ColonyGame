@@ -146,6 +146,28 @@ public class TaskManager : MonoBehaviour
         }
     }
 
+    public bool CancelTasksAt(Vector2Int position)
+    {
+        bool cancelled = false;
+        List<Task> matches = pendingTasks.FindAll(task =>
+            task != null && task.gridPosition == position);
+
+        foreach (Task task in matches)
+        {
+            DuplicantController[] duplicants = FindObjectsByType<DuplicantController>(
+                FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            foreach (DuplicantController duplicant in duplicants)
+            {
+                if (duplicant != null && duplicant.currentTask == task)
+                    duplicant.CancelCurrentTaskExecution();
+            }
+            task.isAssigned = false;
+            RemoveTask(task);
+            cancelled = true;
+        }
+        return cancelled;
+    }
+
     public void ReleaseTask(Task task)
     {
         if (task != null && pendingTasks.Contains(task))

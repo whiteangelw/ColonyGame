@@ -54,6 +54,21 @@ public static class TaskNavigationUtility
         int horizontalRange = Mathf.Min(2, interactionRange);
         int maximumVerticalOffset = interactionRange - 1;
 
+        if (GridManager.Instance != null
+            && GridManager.Instance.TryGetInteractionCells(
+                task.gridPosition,
+                candidatePositions))
+        {
+            if (candidatePositions.Contains(startPos))
+            {
+                return new List<Vector2Int>();
+            }
+
+            return FindPathToClosestReachableCandidate(
+                startPos,
+                effectiveProfile);
+        }
+
         for (int dx = -horizontalRange; dx <= horizontalRange; dx++)
         {
             for (int dy = -1; dy <= maximumVerticalOffset; dy++)
@@ -110,6 +125,21 @@ public static class TaskNavigationUtility
             : 4;
         int horizontalRange = Mathf.Min(2, interactionRange);
         int maximumVerticalOffset = interactionRange - 1;
+
+        if (GridManager.Instance != null
+            && GridManager.Instance.TryGetInteractionCells(
+                targetPos,
+                candidatePositions))
+        {
+            if (candidatePositions.Contains(startPos))
+            {
+                return new List<Vector2Int>();
+            }
+
+            return FindPathToClosestReachableCandidate(
+                startPos,
+                effectiveProfile);
+        }
 
         for (int dx = -horizontalRange; dx <= horizontalRange; dx++)
         {

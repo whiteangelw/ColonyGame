@@ -126,15 +126,16 @@ public class BuildMenuUI : MonoBehaviour
             }
 
             TileType selectedTile = recipe.tileType;
+            GridLayer selectedLayer = recipe.placementLayer;
             if (btn != null)
             {
-                btn.onClick.AddListener(() => SelectTile(selectedTile));
+                btn.onClick.AddListener(() => SelectTile(selectedTile, selectedLayer));
             }
         }
     }
 
-    private void SelectTile(TileType type)
+    private void SelectTile(TileType type, GridLayer layer)
     {
-        GameEvents.TriggerBuildTileSelected(type);
+        GameEvents.TriggerBuildRecipeSelected(type, layer);
     }
 }
