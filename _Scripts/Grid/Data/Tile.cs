@@ -1,0 +1,65 @@
+using UnityEngine;
+
+public enum TileType
+{
+    Empty,
+    Solid,      // Terra comum
+    Grass,      // Grama na superfície
+    Stone,      // Pedra
+    Copper,     // Minério de Cobre
+    Coal,       // Carvão
+    Iron,       // Ferro
+    Gold,       // Ouro
+    Ladder,     // Escada
+    Chest,
+    Bedrock,
+    PrintingPod // Máquina que libera ofertas periódicas de recompensa
+}
+
+public enum GridLayer
+{
+    Terrain = 0,
+    BackWall = 1,
+    Structure = 2,
+    Decoration = 3
+}
+
+public enum FogState
+{
+    Unexplored, // 100% Escuro (Preto)
+    Explored,   // 50% Transparente
+    Revealed    // 100% Visível
+}
+
+public class Tile
+{
+    public int x;
+    public int y;
+    public TileType type;
+    public TileType backWallType = TileType.Empty;
+    public TileType decorationType = TileType.Empty;
+    public string terrainContentId;
+    public string structureContentId;
+    public string backWallContentId;
+    public string decorationContentId;
+    public bool isPassable;
+    public FogState fogState = FogState.Unexplored;
+
+    // --- NOVO CAMPO PARA ACESSIBILIDADE ---
+    public int reachabilityGroupID = -1; // -1 significa inalcançável/não atribuído
+
+    // --- CAMPOS PARA FLUIDOS ---
+    public float liquidAmount = 0f;
+    public float minLiquid = 0.001f;
+
+    public Tile(int x, int y, TileType type)
+    {
+        this.x = x;
+        this.y = y;
+        this.type = type;
+        this.isPassable = type == TileType.Empty
+            || type == TileType.Ladder
+            || type == TileType.Chest
+            || type == TileType.PrintingPod;
+    }
+}
