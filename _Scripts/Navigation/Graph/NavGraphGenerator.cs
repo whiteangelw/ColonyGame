@@ -1,8 +1,13 @@
 using System.Collections.Generic;
 using UnityEngine;
+using Unity.Profiling;
 
 public class NavGraphGenerator : Singleton<NavGraphGenerator>
 {
+    private static readonly ProfilerMarker FullRebuildMarker =
+        new ProfilerMarker("Colony.NavGraph.FullRebuild");
+    private static readonly ProfilerMarker PartialRebuildMarker =
+        new ProfilerMarker("Colony.NavGraph.PartialRebuild");
     private const int MaximumSupportedStepUp = 2;
     private const int MaximumSupportedDropHeight = 5;
     private const int MaximumSupportedJumpGap = 3;
@@ -99,7 +104,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
 
         if (from == to)
         {
-            return IsStandablePosition(from.x, from.y);
+            return IsNavigablePosition(from.x, from.y);
         }
 
         NavNode originNode = GetNode(from);
@@ -143,10 +148,16 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
         width = gridManager.width;
         height = gridManager.height;
 
-        nodeGrid = new NavNode[width, height];
+        long startedAt = PerformanceMetricsService.BeginSample();
+        using (FullRebuildMarker.Auto())
+        {
+            nodeGrid = new NavNode[width, height];
+            CreateNodes();
+            CreateConnections();
+        }
 
-        CreateNodes();
-        CreateConnections();
+        PerformanceMetricsService.RecordNavRegeneration(true, width * height);
+        PerformanceMetricsService.EndSample(PerformanceMetric.NavGraphFull, startedAt);
 
         IsGraphReady = true;
     }
@@ -168,7 +179,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
         {
             for (int y = 0; y < height; y++)
             {
-                if (IsStandablePosition(x, y))
+                if (IsNavigablePosition(x, y))
                 {
                     CalculateNodeEdges(x, y);
                 }
@@ -217,8 +228,16 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
             height - 1
         );
 
-        ClearDirtyRegion(minX, maxX, minY, maxY);
-        RebuildDirtyRegion(minX, maxX, minY, maxY);
+        long startedAt = PerformanceMetricsService.BeginSample();
+        using (PartialRebuildMarker.Auto())
+        {
+            ClearDirtyRegion(minX, maxX, minY, maxY);
+            RebuildDirtyRegion(minX, maxX, minY, maxY);
+        }
+
+        int regeneratedCells = (maxX - minX + 1) * (maxY - minY + 1);
+        PerformanceMetricsService.RecordNavRegeneration(false, regeneratedCells);
+        PerformanceMetricsService.EndSample(PerformanceMetric.NavGraphPartial, startedAt);
     }
 
     private void ClearDirtyRegion(
@@ -251,7 +270,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
         {
             for (int y = minY; y <= maxY; y++)
             {
-                if (IsStandablePosition(x, y))
+                if (IsNavigablePosition(x, y))
                 {
                     CalculateNodeEdges(x, y);
                 }
@@ -262,6 +281,23 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
     public bool IsStandablePosition(int x, int y)
     {
         return gridManager != null && gridManager.IsStandable(x, y);
+    }
+
+    /// <summary>
+    /// Uma posição navegável pode ter suporte no chão ou na própria Ladder.
+    /// Walk/Step continuam usando IsStandablePosition separadamente.
+    /// </summary>
+    public bool IsNavigablePosition(int x, int y)
+    {
+        return IsStandablePosition(x, y)
+            || IsLadderPosition(x, y);
+    }
+
+    public bool IsLadderPosition(int x, int y)
+    {
+        return gridManager != null
+            && gridManager.IsLadder(x, y)
+            && gridManager.IsOccupiable(x, y);
     }
 
     public bool CanProfileUseEdge(
@@ -323,7 +359,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
             return;
         }
 
-        if (!IsStandablePosition(targetX, targetY))
+        if (!IsNavigablePosition(targetX, targetY))
         {
             return;
         }
@@ -364,7 +400,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
             }
 
             // 1. Movimento horizontal normal.
-            if (IsStandablePosition(targetX, y))
+            if (IsNavigablePosition(targetX, y))
             {
                 AddConnection(
                     originNode,
@@ -440,6 +476,8 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
 
             if (!IsStandablePosition(targetX, targetY))
             {
+                // IsStandablePosition só aprova um topo quando o suporte
+                // físico daquela ocupação declarou supportsWeight=true.
                 break;
             }
 
@@ -488,6 +526,14 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                 break;
             }
 
+            // A trajetória vertical da queda não pode atravessar uma
+            // ocupação bloqueante. IsSolid não basta aqui: uma máquina pode
+            // bloquear movimento e, corretamente, não suportar peso.
+            if (!gridManager.IsPassable(targetX, targetY))
+            {
+                break;
+            }
+
             if (IsStandablePosition(targetX, targetY))
             {
                 float distance = 1f + drop * 0.2f;
@@ -505,10 +551,6 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
 
             // Encontrou chão sólido antes de encontrar
             // uma posição válida. Não existe queda possível.
-            if (gridManager.IsSolid(targetX, targetY))
-            {
-                break;
-            }
         }
     }
 

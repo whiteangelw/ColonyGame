@@ -2,8 +2,9 @@ using System.Collections.Generic;
 using UnityEngine;
 
 [DisallowMultipleComponent]
-public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantlable, IInteractable
+public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantlable, IInteractable, IConfiguredStructureBehaviour
 {
+    public bool UsesSpecializedSaveData => true;
     [Header("Posição no Grid")]
     [SerializeField] private Vector2Int gridPosition;
     public Vector2Int GridPosition => gridPosition;
@@ -67,6 +68,18 @@ public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantla
     public void SetGridPosition(Vector2Int pos)
     {
         gridPosition = pos;
+    }
+
+    public void InitializeStructureBehaviour(ConfiguredStructure structure)
+    {
+        if (structure == null) return;
+        SetGridPosition(structure.GridPosition);
+        StructureManager.Instance?.RegisterStorage(structure.GridPosition, this);
+    }
+
+    public void ShutdownStructureBehaviour()
+    {
+        StructureManager.Instance?.UnregisterStorage(gridPosition);
     }
 
     public bool CanStoreItem(ResourceType type, int amount)

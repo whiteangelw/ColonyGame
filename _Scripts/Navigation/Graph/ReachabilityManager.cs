@@ -235,7 +235,7 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
         NavNode startNode = navGraph.GetNode(startPosition);
 
         if (startNode == null
-            || !navGraph.IsStandablePosition(
+            || !navGraph.IsNavigablePosition(
                 startPosition.x,
                 startPosition.y))
         {

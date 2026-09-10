@@ -62,6 +62,7 @@ public class StructureSaveData
     public int x;
     public int y;
     public int tileType;
+    public string definitionId;
     public bool isBeingDismantled;
     public int maxCapacityPerResource;
     public List<ResourceAmountSaveData> storedItems =

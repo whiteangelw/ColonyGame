@@ -4,6 +4,7 @@ using UnityEngine;
 
 public class GridManager : Singleton<GridManager>, IGridService
 {
+    private bool suppressLegacyStructureSpawn;
     [Header("Configurações do Mapa")]
     public int width = 20;
     public int height = 15;
@@ -15,6 +16,7 @@ public class GridManager : Singleton<GridManager>, IGridService
     public int Height => height;
 
     public event Action<int, int, TileType> OnTileChanged;
+    public event Action<int, int> OnLiquidChanged;
     public event Action<int, int, GridLayer, TileType> OnLayerTileChanged;
     public event Action<GridOccupancyRecord, GridOccupancyChangeType>
         OnOccupancyChanged;
@@ -157,6 +159,29 @@ public class GridManager : Singleton<GridManager>, IGridService
         return GetTile(gridPos.x, gridPos.y);
     }
 
+    /// <summary>
+    /// Ponto único de escrita do líquido durante o gameplay. A simulação
+    /// continua separada; este método apenas publica mudanças reais.
+    /// </summary>
+    public bool SetLiquidAmount(int x, int y, float amount)
+    {
+        Tile tile = GetTile(x, y);
+        if (tile == null)
+        {
+            return false;
+        }
+
+        float normalizedAmount = Mathf.Max(0f, amount);
+        if (tile.liquidAmount == normalizedAmount)
+        {
+            return false;
+        }
+
+        tile.liquidAmount = normalizedAmount;
+        OnLiquidChanged?.Invoke(x, y);
+        return true;
+    }
+
     public TileType GetTileType(int x, int y)
     {
         return gridData.GetTileType(x, y, GridLayer.Terrain);
@@ -179,11 +204,29 @@ public class GridManager : Singleton<GridManager>, IGridService
         TileType tileType,
         GridLayer layer)
     {
+        BuildDefinitionSO definition =
+            BuildCatalogService.Instance?.GetById(definitionId);
+
         if (layer == GridLayer.Terrain || layer == GridLayer.Structure)
         {
-            SetTileType(x, y, tileType);
+            suppressLegacyStructureSpawn = true;
+            try
+            {
+                SetTileType(x, y, tileType);
+            }
+            finally
+            {
+                suppressLegacyStructureSpawn = false;
+            }
             gridData.SetContentId(x, y, layer, definitionId);
             OnLayerTileChanged?.Invoke(x, y, layer, tileType);
+
+            if (definition != null && definition.HasPhysicalPrefab)
+            {
+                StructureManager.Instance?.SpawnStructure(
+                    new Vector2Int(x, y),
+                    definition);
+            }
             return;
         }
 
@@ -255,7 +298,7 @@ public class GridManager : Singleton<GridManager>, IGridService
         }
         tile.isPassable = !isSolid;
 
-        if (createsStructure)
+        if (createsStructure && !suppressLegacyStructureSpawn)
         {
             StructureManager.Instance?.SpawnStructure(
                 new Vector2Int(x, y),
@@ -374,16 +417,50 @@ public class GridManager : Singleton<GridManager>, IGridService
     }
 
     /// <summary>
-    /// Verifica se existe alguma forma de suporte físico abaixo do tile.
+    /// Verifica se existe suporte que a navegação pode usar abaixo do tile.
+    /// Uma ocupação física tem precedência sobre o tile visual: bloquear o
+    /// movimento não a torna automaticamente escalável.
     /// </summary>
     public bool HasSupportBelow(int x, int y)
     {
-        return IsSolid(x, y - 1) || IsLadder(x, y - 1);
+        return HasNavigationSupportAt(x, y - 1);
     }
 
     public bool HasSupportBelow(Vector2Int position)
     {
         return HasSupportBelow(position.x, position.y);
+    }
+
+    public bool HasNavigationSupportAt(int x, int y)
+    {
+        if (!IsInsideGrid(x, y))
+        {
+            return true;
+        }
+
+        Vector2Int supportCell = new Vector2Int(x, y);
+
+        // A ocupação é a fonte de verdade para estruturas físicas. Portanto,
+        // uma Chest/Pod/máquina com supportsWeight=false não vira chão apenas
+        // por bloquear a célula.
+        if (Occupancy.TryGetRecord(
+                supportCell,
+                GridLayer.Structure,
+                out GridOccupancyRecord occupancy))
+        {
+            return !occupancy.IsBlueprint
+                && occupancy.Footprint != null
+                && occupancy.Footprint.supportsWeight;
+        }
+
+        Tile tile = GetTile(x, y);
+        return (tile != null && !tile.isPassable)
+            || IsLadder(x, y);
+    }
+
+    public bool HasNavigationSupportAt(Vector2Int position)
+    {
+        return HasNavigationSupportAt(position.x, position.y);
     }
 
     /// <summary>
@@ -442,7 +519,8 @@ public class GridManager : Singleton<GridManager>, IGridService
         return type != TileType.Empty
             && type != TileType.Ladder
             && type != TileType.Chest
-            && type != TileType.PrintingPod;
+            && type != TileType.PrintingPod
+            && type != TileType.Structure;
     }
 
     public bool CanPlaceFootprint(
@@ -521,6 +599,102 @@ public class GridManager : Singleton<GridManager>, IGridService
         }
         failureReason = string.Empty;
         return true;
+    }
+
+    /// <summary>
+    /// Valida um plano que pode exigir escavação antes da construção.
+    /// Não libera Bedrock, estruturas existentes ou footprints ocupados.
+    /// </summary>
+    public bool CanPlanFootprint(
+        Vector2Int anchor,
+        StructureFootprintDefinition footprint,
+        GridLayer layer,
+        out string failureReason,
+        UnityEngine.Object ignoredOwner = null)
+    {
+        if (layer != GridLayer.Terrain && layer != GridLayer.Structure)
+        {
+            return CanPlaceFootprint(
+                anchor,
+                footprint,
+                layer,
+                out failureReason,
+                ignoredOwner);
+        }
+
+        if (footprint == null)
+        {
+            failureReason = "Definição de footprint ausente.";
+            return false;
+        }
+
+        Vector2Int minimum = footprint.GetMinimumCell(anchor);
+        for (int localX = 0; localX < footprint.width; localX++)
+        {
+            for (int localY = 0; localY < footprint.height; localY++)
+            {
+                Vector2Int cell = minimum + new Vector2Int(localX, localY);
+                Tile tile = GetTile(cell);
+
+                if (tile == null)
+                {
+                    failureReason = "Parte da construção ficaria fora do mapa.";
+                    return false;
+                }
+
+                if (tile.type == TileType.Bedrock)
+                {
+                    failureReason = "Bedrock não pode ser removido para uma construção.";
+                    return false;
+                }
+
+                if (tile.type != TileType.Empty
+                    && !IsTerrainRemovableForBuildPlan(tile.type))
+                {
+                    failureReason = "A célula contém uma construção que não pode ser substituída automaticamente.";
+                    return false;
+                }
+
+                if (Occupancy.IsOccupied(
+                        cell,
+                        GridLayer.Structure,
+                        ignoredOwner))
+                {
+                    failureReason = "A área já está reservada por outra estrutura ou blueprint.";
+                    return false;
+                }
+            }
+        }
+
+        if (!HasRequiredFootprintSupport(anchor, footprint))
+        {
+            failureReason = footprint.supportRule ==
+                StructureSupportRule.EveryBottomCell
+                    ? "Toda a base planejada precisa de apoio."
+                    : "A construção planejada precisa de apoio.";
+            return false;
+        }
+
+        failureReason = string.Empty;
+        return true;
+    }
+
+    public bool IsTerrainRemovableForBuildPlan(TileType tileType)
+    {
+        switch (tileType)
+        {
+            case TileType.Solid:
+            case TileType.Grass:
+            case TileType.Stone:
+            case TileType.Copper:
+            case TileType.Coal:
+            case TileType.Iron:
+            case TileType.Gold:
+                return true;
+
+            default:
+                return false;
+        }
     }
 
     public bool RegisterFootprint(

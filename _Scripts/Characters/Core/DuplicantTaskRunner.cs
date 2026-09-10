@@ -634,6 +634,7 @@ public class DuplicantTaskRunner : MonoBehaviour
             yield break;
         }
 
+        PerformanceMetricsService.RecordGlobalObjectSearch();
         ResourceItem[] itemsOnGround = Object.FindObjectsByType<ResourceItem>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
         foreach (var item in itemsOnGround)
         {

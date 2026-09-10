@@ -1,8 +1,11 @@
 using System.Collections.Generic;
 using UnityEngine;
+using Unity.Profiling;
 
 public class PathfindingAStar : MonoBehaviour
 {
+    private static readonly ProfilerMarker FindPathMarker =
+        new ProfilerMarker("Colony.Pathfinding.FindPath");
     public static PathfindingAStar Instance { get; private set; }
 
     private NavGraphGenerator navGraph;
@@ -85,6 +88,28 @@ public class PathfindingAStar : MonoBehaviour
         Vector2Int targetPos,
         DuplicantCapabilityProfile profile = null)
     {
+        using (FindPathMarker.Auto())
+        {
+            PerformanceMetricsService.RecordPathRequest();
+            long startedAt = PerformanceMetricsService.BeginSample();
+            try
+            {
+                return FindPathCore(startPos, targetPos, profile);
+            }
+            finally
+            {
+                PerformanceMetricsService.EndSample(
+                    PerformanceMetric.Pathfinding,
+                    startedAt);
+            }
+        }
+    }
+
+    private List<Vector2Int> FindPathCore(
+        Vector2Int startPos,
+        Vector2Int targetPos,
+        DuplicantCapabilityProfile profile)
+    {
         if (!CanSearch())
         {
             return null;
@@ -108,8 +133,8 @@ public class PathfindingAStar : MonoBehaviour
             return null;
         }
 
-        // O destino precisa ser um Node navegável.
-        if (!navGraph.IsStandablePosition(
+        // O destino pode estar apoiado no chão ou na própria Ladder.
+        if (!navGraph.IsNavigablePosition(
                 targetPos.x,
                 targetPos.y))
         {

@@ -2,9 +2,12 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Tilemaps;
+using Unity.Profiling;
 
 public class TilemapVisualizer : MonoBehaviour
 {
+    private static readonly ProfilerMarker FullRefreshMarker =
+        new ProfilerMarker("TilemapVisualizer.FullRefresh");
     [System.Serializable]
     public struct TileMapping
     {
@@ -16,7 +19,8 @@ public class TilemapVisualizer : MonoBehaviour
     [SerializeField] private Tilemap targetTilemap;
     [SerializeField] private GridLayer visualizedLayer = GridLayer.Terrain;
 
-    [Header("Mapeamento de Tiles")]
+    [Header("Fallback visual legado")]
+    [Tooltip("Usado apenas quando o conteúdo não possui BuildDefinitionSO/Tile Asset.")]
     [SerializeField] private List<TileMapping> mappingList = new List<TileMapping>();
 
     private Dictionary<TileType, TileBase> tileDictionary;
@@ -97,6 +101,10 @@ public class TilemapVisualizer : MonoBehaviour
     {
         if (GridManager.Instance == null || !TryGetTargetTilemap()) return;
 
+        long startedAt = PerformanceMetricsService.BeginSample();
+        using (FullRefreshMarker.Auto())
+        {
+
         targetTilemap.ClearAllTiles();
 
         for (int x = 0; x < GridManager.Instance.width; x++)
@@ -110,6 +118,10 @@ public class TilemapVisualizer : MonoBehaviour
                     targetTilemap.SetTile(pos, tileAsset);
             }
         }
+        }
+        PerformanceMetricsService.EndSample(
+            PerformanceMetric.TilemapFullRefresh,
+            startedAt);
     }
 
     private bool TryResolveTileAsset(
@@ -128,9 +140,20 @@ public class TilemapVisualizer : MonoBehaviour
             BuildCatalogService.Instance?.GetById(contentId);
 
         if (definition != null
-            && definition.PlacementLayer == visualizedLayer
-            && definition.TileAsset != null)
+            && definition.PlacementLayer == visualizedLayer)
         {
+            // Prefabs físicos desenham a própria imagem. Não desenhe também
+            // um Tilemap por baixo deles.
+            if (definition.HasPhysicalPrefab)
+            {
+                return false;
+            }
+
+            if (definition.TileAsset == null)
+            {
+                return false;
+            }
+
             tileAsset = definition.TileAsset;
             return true;
         }

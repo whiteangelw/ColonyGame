@@ -1,8 +1,11 @@
 using UnityEngine;
 using UnityEngine.Tilemaps;
+using Unity.Profiling;
 
 public class FogOfWarManager : Singleton<FogOfWarManager>
 {
+    private static readonly ProfilerMarker FullRefreshMarker =
+        new ProfilerMarker("FogOfWar.FullRefresh");
 
     [Header("Referências")]
     [SerializeField] private Tilemap fogTilemap;
@@ -47,6 +50,10 @@ public class FogOfWarManager : Singleton<FogOfWarManager>
     {
         if (GridManager.Instance == null || !TryGetFogTilemap()) return;
 
+        long startedAt = PerformanceMetricsService.BeginSample();
+        using (FullRefreshMarker.Auto())
+        {
+
         fogTilemap.ClearAllTiles();
 
         int width = GridManager.Instance.width;
@@ -63,6 +70,10 @@ public class FogOfWarManager : Singleton<FogOfWarManager>
                 }
             }
         }
+        }
+        PerformanceMetricsService.EndSample(
+            PerformanceMetric.FogFullRefresh,
+            startedAt);
     }
 
     public void RevealArea(Vector2Int centerGridPos)

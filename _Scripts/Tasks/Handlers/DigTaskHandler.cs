@@ -18,6 +18,7 @@ public class DigTaskHandler : ITaskHandler
     {
         // Redirecionado para o serviço de interação
         WorldInteractionService.Instance?.DigTile(task.gridPosition.x, task.gridPosition.y);
+        task.targetBlueprint?.NotifyTaskEnded(task);
         onComplete?.Invoke();
     }
 
