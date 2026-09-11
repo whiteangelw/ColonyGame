@@ -873,9 +873,9 @@ public class SaveGameService : MonoBehaviour
     {
         if (FloraManager.Instance == null) return;
 
-        foreach (HarvestableFoodSource source in FloraManager.Instance.GetSnapshot())
+        foreach (FloraEntity source in FloraManager.Instance.GetSnapshot())
         {
-            if (source == null || source.AvailablePortions <= 0) continue;
+            if (source == null || source.AvailableUnits <= 0) continue;
 
             Vector2Int position = source.GridPosition;
             data.flora.Add(new FloraSaveData
@@ -883,7 +883,7 @@ public class SaveGameService : MonoBehaviour
                 floraId = source.FloraId,
                 gridX = position.x,
                 gridY = position.y,
-                availablePortions = source.AvailablePortions
+                availablePortions = source.AvailableUnits
             });
         }
     }

@@ -137,6 +137,7 @@ public class FogOfWarManager : Singleton<FogOfWarManager>
 
                     Tile tile = GridManager.Instance.GetTile(targetX, targetY);
                     if (tile == null) continue;
+                    FogState previousState = tile.fogState;
 
                     if (distance <= innerRadius)
                     {
@@ -147,6 +148,15 @@ public class FogOfWarManager : Singleton<FogOfWarManager>
                     {
                         // Borda em Degradê (Só vira Explored se não tiver sido 100% revelado antes)
                         tile.fogState = FogState.Explored;
+                    }
+
+                    if (tile.fogState != previousState)
+                    {
+                        GridManager.Instance.MarkRegionDirty(
+                            targetX,
+                            targetY,
+                            WorldRegionDirtyFlags.Fog
+                            | WorldRegionDirtyFlags.Visual);
                     }
 
                     UpdateFogTileVisual(targetX, targetY, tile.fogState);

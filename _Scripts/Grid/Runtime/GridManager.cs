@@ -10,10 +10,19 @@ public class GridManager : Singleton<GridManager>, IGridService
     public int height = 15;
     public float cellSize = 1.0f;
 
+    [Header("P5E - Regiões")]
+    [SerializeField, Min(8)] private int regionSize = 32;
+
     public bool IsGridReady { get; private set; }
+    public WorldGenerationResult LastGenerationResult { get; private set; }
 
     public int Width => width;
     public int Height => height;
+    public WorldRegionIndex Regions { get; } = new WorldRegionIndex();
+    public int RegionSize => Regions.IsInitialized ? Regions.RegionSize : regionSize;
+    public int RegionColumns => Regions.Columns;
+    public int RegionRows => Regions.Rows;
+    public int RegionCount => Regions.Count;
 
     public event Action<int, int, TileType> OnTileChanged;
     public event Action<int, int> OnLiquidChanged;
@@ -21,6 +30,8 @@ public class GridManager : Singleton<GridManager>, IGridService
     public event Action<GridOccupancyRecord, GridOccupancyChangeType>
         OnOccupancyChanged;
     public event Action OnGridRebuilt;
+    public event Action<WorldGenerationResult> OnWorldGenerated;
+    public event Action<WorldRegionState, WorldRegionDirtyFlags> OnRegionDirty;
 
     private readonly GridData gridData = new GridData();
     private GridOccupancyService occupancyService;
@@ -68,17 +79,26 @@ public class GridManager : Singleton<GridManager>, IGridService
     private void GenerateGrid()
     {
         IsGridReady = false;
+        LastGenerationResult = null;
         ClearOccupancy();
 
         gridData.Create(width, height);
         width = gridData.Width;
         height = gridData.Height;
+        InitializeRegions();
 
         WorldGenerator generator = GetComponent<WorldGenerator>();
 
-        if (generator != null)
+        if (generator != null
+            && generator.TryGenerateWorldData(
+                width,
+                height,
+                out WorldGenerationResult generatedWorld))
         {
-            generator.GenerateWorld();
+            if (gridData.ApplyGenerationResult(generatedWorld))
+            {
+                LastGenerationResult = generatedWorld;
+            }
         }
 
         // Mantém as bordas do mapa protegidas.
@@ -95,6 +115,11 @@ public class GridManager : Singleton<GridManager>, IGridService
 
         IsGridReady = true;
         OnGridRebuilt?.Invoke();
+        Regions.ClearAllDirty(WorldRegionDirtyFlags.All);
+        if (LastGenerationResult != null)
+        {
+            OnWorldGenerated?.Invoke(LastGenerationResult);
+        }
     }
 
     public void BeginSnapshotRestore(int restoredWidth, int restoredHeight)
@@ -102,10 +127,12 @@ public class GridManager : Singleton<GridManager>, IGridService
         width = Mathf.Max(1, restoredWidth);
         height = Mathf.Max(1, restoredHeight);
         IsGridReady = false;
+        LastGenerationResult = null;
         ClearOccupancy();
         gridData.Create(width, height);
         width = gridData.Width;
         height = gridData.Height;
+        InitializeRegions();
     }
 
     public void RestoreTileState(
@@ -158,6 +185,49 @@ public class GridManager : Singleton<GridManager>, IGridService
         }
 
         OnGridRebuilt?.Invoke();
+        Regions.ClearAllDirty(WorldRegionDirtyFlags.All);
+    }
+
+    public void MarkRegionDirty(
+        int x,
+        int y,
+        WorldRegionDirtyFlags flags,
+        int paddingInCells = 0)
+    {
+        Regions.MarkCellDirty(x, y, flags, paddingInCells);
+    }
+
+    public void MarkRegionBoundsDirty(
+        int minimumX,
+        int minimumY,
+        int maximumX,
+        int maximumY,
+        WorldRegionDirtyFlags flags)
+    {
+        Regions.MarkBoundsDirty(
+            minimumX,
+            minimumY,
+            maximumX,
+            maximumY,
+            flags);
+    }
+
+    public int GetDirtyRegionCount(WorldRegionDirtyFlags flags)
+    {
+        return Regions.CountDirty(flags);
+    }
+
+    [ContextMenu("P5E - Log Region Diagnostics")]
+    private void LogRegionDiagnostics()
+    {
+        Debug.Log(
+            $"[P5E] World={width}x{height}, Region={RegionSize}x{RegionSize}, "
+            + $"Grid={RegionColumns}x{RegionRows}, Total={RegionCount}, "
+            + $"Terrain={GetDirtyRegionCount(WorldRegionDirtyFlags.Terrain)}, "
+            + $"Navigation={GetDirtyRegionCount(WorldRegionDirtyFlags.Navigation)}, "
+            + $"Liquid={GetDirtyRegionCount(WorldRegionDirtyFlags.Liquid)}, "
+            + $"Fog={GetDirtyRegionCount(WorldRegionDirtyFlags.Fog)}, "
+            + $"Visual={GetDirtyRegionCount(WorldRegionDirtyFlags.Visual)}");
     }
 
     public Tile GetTile(int x, int y)
@@ -191,6 +261,10 @@ public class GridManager : Singleton<GridManager>, IGridService
         }
 
         tile.liquidAmount = normalizedAmount;
+        MarkRegionDirty(
+            x,
+            y,
+            WorldRegionDirtyFlags.Liquid | WorldRegionDirtyFlags.Visual);
         OnLiquidChanged?.Invoke(x, y);
         return true;
     }
@@ -245,6 +319,7 @@ public class GridManager : Singleton<GridManager>, IGridService
 
         if (!gridData.SetTileType(x, y, layer, tileType)) return;
         gridData.SetContentId(x, y, layer, definitionId);
+        MarkRegionDirty(x, y, WorldRegionDirtyFlags.Visual);
         OnLayerTileChanged?.Invoke(x, y, layer, tileType);
     }
 
@@ -263,6 +338,7 @@ public class GridManager : Singleton<GridManager>, IGridService
         }
 
         if (!gridData.SetTileType(x, y, layer, newType)) return;
+        MarkRegionDirty(x, y, WorldRegionDirtyFlags.Visual);
         OnLayerTileChanged?.Invoke(x, y, layer, newType);
     }
 
@@ -310,6 +386,15 @@ public class GridManager : Singleton<GridManager>, IGridService
             gridData.SetContentId(x, y, GridLayer.Structure, string.Empty);
         }
         tile.isPassable = !isSolid;
+
+        MarkRegionDirty(
+            x,
+            y,
+            WorldRegionDirtyFlags.Terrain
+            | WorldRegionDirtyFlags.Navigation
+            | WorldRegionDirtyFlags.Liquid
+            | WorldRegionDirtyFlags.Fog
+            | WorldRegionDirtyFlags.Visual);
 
         if (createsStructure && !suppressLegacyStructureSpawn)
         {
@@ -884,6 +969,20 @@ public class GridManager : Singleton<GridManager>, IGridService
         Occupancy.Clear();
     }
 
+    private void InitializeRegions()
+    {
+        Regions.RegionMarkedDirty -= HandleRegionMarkedDirty;
+        Regions.Initialize(width, height, Mathf.Max(8, regionSize));
+        Regions.RegionMarkedDirty += HandleRegionMarkedDirty;
+    }
+
+    private void HandleRegionMarkedDirty(
+        WorldRegionState region,
+        WorldRegionDirtyFlags addedFlags)
+    {
+        OnRegionDirty?.Invoke(region, addedFlags);
+    }
+
     private void HandleOccupancyChanged(
         GridOccupancyRecord record,
         GridOccupancyChangeType changeType)
@@ -900,6 +999,11 @@ public class GridManager : Singleton<GridManager>, IGridService
         // OnTileChanged quando a ocupação física muda.
         foreach (Vector2Int cell in record.Cells)
         {
+            MarkRegionDirty(
+                cell.x,
+                cell.y,
+                WorldRegionDirtyFlags.Navigation
+                | WorldRegionDirtyFlags.Visual);
             OnTileChanged?.Invoke(
                 cell.x,
                 cell.y,
