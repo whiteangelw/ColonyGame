@@ -47,6 +47,8 @@ public class GameSessionMenuUI : MonoBehaviour
 
         BindButtons();
         saveService.OnStartupSessionFinished += HandleStartupSessionFinished;
+        saveService.OnSaveFinished += HandleSaveFinished;
+        saveService.OnLoadProgress += HandleLoadProgress;
         saveService.RequireStartupChoice();
         SelectSlot(1);
         OpenStartupMenu();
@@ -59,6 +61,8 @@ public class GameSessionMenuUI : MonoBehaviour
         if (saveService != null)
         {
             saveService.OnStartupSessionFinished -= HandleStartupSessionFinished;
+            saveService.OnSaveFinished -= HandleSaveFinished;
+            saveService.OnLoadProgress -= HandleLoadProgress;
         }
 
         if (startupMenuOpen)
@@ -193,9 +197,27 @@ public class GameSessionMenuUI : MonoBehaviour
 
     private void SaveGame()
     {
+        if (saveService.IsBusy) return;
+
+        if (saveButton != null) saveButton.interactable = false;
         saveService.SaveGame();
         SetStatus(saveService.LastOperationMessage);
+    }
+
+    private void HandleSaveFinished(bool succeeded, string message)
+    {
+        SetStatus(message);
         RefreshSlotTexts();
+
+        if (saveButton != null)
+        {
+            saveButton.interactable = true;
+        }
+    }
+
+    private void HandleLoadProgress(float progress, string message)
+    {
+        SetStatus(message);
     }
 
     private void HandleStartupSessionFinished(bool succeeded, string message)

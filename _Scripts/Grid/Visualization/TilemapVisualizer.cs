@@ -2,9 +2,14 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Tilemaps;
+using Unity.Profiling;
 
 public class TilemapVisualizer : MonoBehaviour
 {
+    private static readonly ProfilerMarker FullRefreshMarker =
+        new ProfilerMarker("TilemapVisualizer.FullRefresh");
+    private static readonly ProfilerMarker FullRefreshBatchMarker =
+        new ProfilerMarker("TilemapVisualizer.FullRefreshBatch");
     [System.Serializable]
     public struct TileMapping
     {
@@ -16,7 +21,11 @@ public class TilemapVisualizer : MonoBehaviour
     [SerializeField] private Tilemap targetTilemap;
     [SerializeField] private GridLayer visualizedLayer = GridLayer.Terrain;
 
-    [Header("Mapeamento de Tiles")]
+    [Header("Carregamento incremental")]
+    [SerializeField, Min(1)] private int fullRefreshColumnsPerFrame = 32;
+
+    [Header("Fallback visual legado")]
+    [Tooltip("Usado apenas quando o conteúdo não possui BuildDefinitionSO/Tile Asset.")]
     [SerializeField] private List<TileMapping> mappingList = new List<TileMapping>();
 
     private Dictionary<TileType, TileBase> tileDictionary;
@@ -39,7 +48,7 @@ public class TilemapVisualizer : MonoBehaviour
         {
             subscribedGridManager.OnTileChanged += OnTileChangedHandler;
             subscribedGridManager.OnLayerTileChanged += OnLayerTileChangedHandler;
-            subscribedGridManager.OnGridRebuilt += RenderFullGrid;
+            subscribedGridManager.OnGridRebuilt += HandleGridRebuilt;
 
             // Se o grid já estiver pronto quando o Start rodar, desenha imediatamente
             if (subscribedGridManager.IsGridReady)
@@ -55,7 +64,45 @@ public class TilemapVisualizer : MonoBehaviour
         {
             subscribedGridManager.OnTileChanged -= OnTileChangedHandler;
             subscribedGridManager.OnLayerTileChanged -= OnLayerTileChangedHandler;
-            subscribedGridManager.OnGridRebuilt -= RenderFullGrid;
+            subscribedGridManager.OnGridRebuilt -= HandleGridRebuilt;
+        }
+    }
+
+    private void HandleGridRebuilt()
+    {
+        if (!SaveGameRuntime.IsLoading)
+        {
+            RenderFullGrid();
+        }
+    }
+
+    public IEnumerator RenderFullGridIncrementally()
+    {
+        GridManager grid = GridManager.Instance;
+        if (grid == null || !TryGetTargetTilemap()) yield break;
+
+        targetTilemap.ClearAllTiles();
+        int columnsPerFrame = Mathf.Max(1, fullRefreshColumnsPerFrame);
+
+        for (int startX = 0; startX < grid.width; startX += columnsPerFrame)
+        {
+            int endX = Mathf.Min(startX + columnsPerFrame, grid.width);
+            using (FullRefreshBatchMarker.Auto())
+            {
+                for (int x = startX; x < endX; x++)
+                {
+                    for (int y = 0; y < grid.height; y++)
+                    {
+                        TileType type = grid.GetTileType(x, y, visualizedLayer);
+                        if (TryResolveTileAsset(x, y, type, out TileBase tileAsset))
+                        {
+                            targetTilemap.SetTile(new Vector3Int(x, y, 0), tileAsset);
+                        }
+                    }
+                }
+            }
+
+            if (endX < grid.width) yield return null;
         }
     }
 
@@ -97,6 +144,10 @@ public class TilemapVisualizer : MonoBehaviour
     {
         if (GridManager.Instance == null || !TryGetTargetTilemap()) return;
 
+        long startedAt = PerformanceMetricsService.BeginSample();
+        using (FullRefreshMarker.Auto())
+        {
+
         targetTilemap.ClearAllTiles();
 
         for (int x = 0; x < GridManager.Instance.width; x++)
@@ -110,6 +161,10 @@ public class TilemapVisualizer : MonoBehaviour
                     targetTilemap.SetTile(pos, tileAsset);
             }
         }
+        }
+        PerformanceMetricsService.EndSample(
+            PerformanceMetric.TilemapFullRefresh,
+            startedAt);
     }
 
     private bool TryResolveTileAsset(
@@ -128,9 +183,20 @@ public class TilemapVisualizer : MonoBehaviour
             BuildCatalogService.Instance?.GetById(contentId);
 
         if (definition != null
-            && definition.PlacementLayer == visualizedLayer
-            && definition.TileAsset != null)
+            && definition.PlacementLayer == visualizedLayer)
         {
+            // Prefabs físicos desenham a própria imagem. Não desenhe também
+            // um Tilemap por baixo deles.
+            if (definition.HasPhysicalPrefab)
+            {
+                return false;
+            }
+
+            if (definition.TileAsset == null)
+            {
+                return false;
+            }
+
             tileAsset = definition.TileAsset;
             return true;
         }

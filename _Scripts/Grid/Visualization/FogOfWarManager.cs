@@ -1,13 +1,22 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.Tilemaps;
+using Unity.Profiling;
 
 public class FogOfWarManager : Singleton<FogOfWarManager>
 {
+    private static readonly ProfilerMarker FullRefreshMarker =
+        new ProfilerMarker("FogOfWar.FullRefresh");
+    private static readonly ProfilerMarker FullRefreshBatchMarker =
+        new ProfilerMarker("FogOfWar.FullRefreshBatch");
 
     [Header("Referências")]
     [SerializeField] private Tilemap fogTilemap;
     [SerializeField] private TileBase blackFogTile; // Tile Escuro (100% Opaco)
     [SerializeField] private TileBase semiFogTile;  // Tile Semitransparente (Degradê)
+
+    [Header("Carregamento incremental")]
+    [SerializeField, Min(1)] private int fullRefreshColumnsPerFrame = 16;
 
     [Header("Configurações do Raio de Visão")]
     [SerializeField] private int innerRadius = 4; // Raio 100% Visível
@@ -26,7 +35,7 @@ public class FogOfWarManager : Singleton<FogOfWarManager>
         subscribedGridManager = GridManager.Instance;
         if (subscribedGridManager != null)
         {
-            subscribedGridManager.OnGridRebuilt += InitializeFog;
+            subscribedGridManager.OnGridRebuilt += HandleGridRebuilt;
 
             if (subscribedGridManager.IsGridReady)
             {
@@ -39,13 +48,55 @@ public class FogOfWarManager : Singleton<FogOfWarManager>
     {
         if (subscribedGridManager != null)
         {
-            subscribedGridManager.OnGridRebuilt -= InitializeFog;
+            subscribedGridManager.OnGridRebuilt -= HandleGridRebuilt;
+        }
+    }
+
+    private void HandleGridRebuilt()
+    {
+        if (!SaveGameRuntime.IsLoading)
+        {
+            InitializeFog();
+        }
+    }
+
+    public IEnumerator InitializeFogIncrementally()
+    {
+        GridManager grid = GridManager.Instance;
+        if (grid == null || !TryGetFogTilemap()) yield break;
+
+        fogTilemap.ClearAllTiles();
+        int columnsPerFrame = Mathf.Max(1, fullRefreshColumnsPerFrame);
+
+        for (int startX = 0; startX < grid.width; startX += columnsPerFrame)
+        {
+            int endX = Mathf.Min(startX + columnsPerFrame, grid.width);
+            using (FullRefreshBatchMarker.Auto())
+            {
+                for (int x = startX; x < endX; x++)
+                {
+                    for (int y = 0; y < grid.height; y++)
+                    {
+                        Tile tile = grid.GetTile(x, y);
+                        if (tile != null)
+                        {
+                            UpdateFogTileVisual(x, y, tile.fogState);
+                        }
+                    }
+                }
+            }
+
+            if (endX < grid.width) yield return null;
         }
     }
 
     public void InitializeFog()
     {
         if (GridManager.Instance == null || !TryGetFogTilemap()) return;
+
+        long startedAt = PerformanceMetricsService.BeginSample();
+        using (FullRefreshMarker.Auto())
+        {
 
         fogTilemap.ClearAllTiles();
 
@@ -63,6 +114,10 @@ public class FogOfWarManager : Singleton<FogOfWarManager>
                 }
             }
         }
+        }
+        PerformanceMetricsService.EndSample(
+            PerformanceMetric.FogFullRefresh,
+            startedAt);
     }
 
     public void RevealArea(Vector2Int centerGridPos)

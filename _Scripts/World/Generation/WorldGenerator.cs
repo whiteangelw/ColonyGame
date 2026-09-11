@@ -1,8 +1,11 @@
 using System.Collections.Generic;
 using UnityEngine;
+using Unity.Profiling;
 
 public class WorldGenerator : MonoBehaviour
 {
+    private static readonly ProfilerMarker GenerateMarker =
+        new ProfilerMarker("WorldGeneration.Generate");
     [System.Serializable]
     public class BiomeLayer
     {
@@ -56,6 +59,10 @@ public class WorldGenerator : MonoBehaviour
     {
         if (gridManager == null || biomeLayers.Count == 0) return;
 
+        long startedAt = PerformanceMetricsService.BeginSample();
+        using (GenerateMarker.Auto())
+        {
+
         int width = gridManager.width;
         int height = gridManager.height;
 
@@ -86,6 +93,10 @@ public class WorldGenerator : MonoBehaviour
 
         // 4. APLICA CAMADA DE COPERTURA (Grama ou Superfície do Bioma)
         ApplySurfaceLayer(width, height);
+        }
+        PerformanceMetricsService.EndSample(
+            PerformanceMetric.WorldGeneration,
+            startedAt);
     }
 
     private BiomeData GetBiomeAtDepth(int depth)
@@ -190,14 +201,14 @@ public class WorldGenerator : MonoBehaviour
                 if (t != null)
                 {
                     t.fogState = FogState.Revealed;
-                    t.liquidAmount = 0f;
+                    gridManager.SetLiquidAmount(x, y, 0f);
                 }
             }
 
             Tile groundTile = gridManager.GetTile(x, surfaceY);
             if (groundTile != null)
             {
-                groundTile.liquidAmount = 0f;
+                gridManager.SetLiquidAmount(x, surfaceY, 0f);
                 groundTile.fogState = FogState.Revealed;
             }
         }

@@ -39,10 +39,15 @@ public class DevModeManager : Singleton<DevModeManager>
         380f,
         Mathf.Max(300f, Screen.height - 20f)
     );
+    private Rect PerformanceWindowRect => new Rect(270f, 10f, 330f, 700f);
 
     private void Update()
     {
-        if (Keyboard.current != null
+        bool gameplayKeyboardAllowed = InputContextService.Instance == null
+            || InputContextService.Instance.IsGameplayKeyboardAllowed;
+
+        if (gameplayKeyboardAllowed
+            && Keyboard.current != null
             && Keyboard.current.f1Key.wasPressedThisFrame)
         {
             ToggleDevMode(!isDevModeActive);
@@ -309,6 +314,7 @@ public class DevModeManager : Singleton<DevModeManager>
         }
 
         DrawToolsWindow();
+        DrawPerformanceWindow();
         DrawDiagnosticsWindow();
     }
 
@@ -350,6 +356,57 @@ public class DevModeManager : Singleton<DevModeManager>
         {
             currentTool = tool;
         }
+    }
+
+    private void DrawPerformanceWindow()
+    {
+        GUILayout.BeginArea(
+            PerformanceWindowRect,
+            "P4A - PERFORMANCE",
+            GUI.skin.window);
+
+        PerformanceMetricsService metrics = PerformanceMetricsService.Instance;
+        if (metrics == null)
+        {
+            GUILayout.Label("Coletor indisponível neste build.");
+            GUILayout.EndArea();
+            return;
+        }
+
+        PerformanceMetricsSnapshot snapshot = metrics.Snapshot;
+        GUILayout.Label($"FPS / frame: {snapshot.FramesPerSecond:F1} / {snapshot.FrameTimeMs:F2} ms");
+        GUILayout.Label($"GC/frame: {snapshot.GcAllocatedBytesPerFrame:N0} bytes");
+        GUILayout.Space(4f);
+        GUILayout.Label($"Paths/s: {snapshot.PathRequestsPerSecond:F1}");
+        GUILayout.Label($"Path avg/max: {snapshot.PathfindingAverageMs:F3} / {snapshot.PathfindingMaximumMs:F3} ms");
+        GUILayout.Label($"Task select avg/max: {snapshot.TaskSelectionAverageMs:F3} / {snapshot.TaskSelectionMaximumMs:F3} ms");
+        GUILayout.Label($"Tasks pendentes: {snapshot.PendingTasks}");
+        GUILayout.Space(4f);
+        GUILayout.Label($"Duplicants / itens: {snapshot.ActiveDuplicants} / {snapshot.ActiveResourceItems}");
+        GUILayout.Label($"Ticks IA/s: {snapshot.BrainTicksPerSecond:F1}");
+        GUILayout.Label($"Ticks necessidades/s: {snapshot.NeedsTicksPerSecond:F1}");
+        GUILayout.Space(4f);
+        GUILayout.Label($"Nav full/partial: {snapshot.FullNavRegenerations} / {snapshot.PartialNavRegenerations}");
+        GUILayout.Label($"Células Nav: {snapshot.NavCellsRegenerated:N0}");
+        GUILayout.Label($"Buscas globais: {snapshot.GlobalObjectSearches}");
+        GUILayout.Label($"Save / Load: {snapshot.LastSaveMs:F1} / {snapshot.LastLoadMs:F1} ms");
+        GUILayout.Label($"Menu metadata: {snapshot.LastSaveMenuMetadataMs:F1} ms");
+        GUILayout.Label($"Read / JSON load: {snapshot.LastSaveReadFileMs:F1} / {snapshot.LastSaveDeserializeMs:F1} ms");
+        GUILayout.Label($"Save capture/json/write: {snapshot.LastSaveCaptureMs:F1} / {snapshot.LastSaveSerializeMs:F1} / {snapshot.LastSaveWriteMs:F1} ms");
+        GUILayout.Label($"Load clear/grid/entities/post: {snapshot.LastLoadClearWorldMs:F1} / {snapshot.LastLoadRestoreGridMs:F1} / {snapshot.LastLoadRestoreEntitiesMs:F1} / {snapshot.LastLoadPostRestoreMs:F1} ms");
+        GUILayout.Label($"World gen: {snapshot.LastWorldGenerationMs:F1} ms");
+        GUILayout.Label($"Tilemap / Fog full: {snapshot.LastTilemapFullRefreshMs:F1} / {snapshot.LastFogFullRefreshMs:F1} ms");
+        GUILayout.Space(4f);
+        GUILayout.Label($"Liquid avg/max: {snapshot.LiquidVisualizerAverageMs:F3} / {snapshot.LiquidVisualizerMaximumMs:F3} ms");
+        GUILayout.Label($"Liquid cells: {snapshot.LiquidCellsProcessed:N0}");
+        GUILayout.Label($"Liquid pending: {snapshot.LiquidDirtyCellsPending:N0} cells / {snapshot.LiquidDepthColumnsPending:N0} colunas");
+        GUILayout.Space(4f);
+        GUILayout.Label($"Liquid sim avg/max: {snapshot.LiquidSimulationAverageMs:F3} / {snapshot.LiquidSimulationMaximumMs:F3} ms");
+        GUILayout.Label($"Liquid sim ticks/s: {snapshot.LiquidSimulationTicksPerSecond:F1}");
+        GUILayout.Label($"Liquid sim cells/s: {snapshot.LiquidSimulationCellsPerSecond:N0}");
+        GUILayout.Label($"Liquid buffer resizes: {snapshot.LiquidBufferResizes}");
+
+        GUILayout.EndArea();
     }
 
     private void DrawDiagnosticsWindow()

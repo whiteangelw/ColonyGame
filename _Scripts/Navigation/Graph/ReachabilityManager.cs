@@ -4,6 +4,8 @@ using UnityEngine;
 
 public class ReachabilityManager : Singleton<ReachabilityManager>
 {
+    private static readonly HashSet<Vector2Int> EmptyReachableSet =
+        new HashSet<Vector2Int>();
     [Header("Performance")]
     [SerializeField, Min(0.05f)]
     private float minimumRecalculationInterval = 0.25f;
@@ -16,6 +18,7 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
             new Dictionary<ReachabilityCacheKey, HashSet<Vector2Int>>();
     private readonly HashSet<DuplicantController> registeredDuplicants =
         new HashSet<DuplicantController>();
+    private readonly Queue<NavNode> traversalQueue = new Queue<NavNode>();
     public bool IsReady { get; private set; }
     private GridManager subscribedGridManager;
     private bool recalculationPending;
@@ -37,7 +40,8 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
 
     private void LateUpdate()
     {
-        if (!recalculationPending
+        if (SaveGameRuntime.IsLoading
+            || !recalculationPending
             || Time.unscaledTime < nextAllowedRecalculationTime)
         {
             return;
@@ -200,7 +204,7 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
 
         if (effectiveProfile == null)
         {
-            return new HashSet<Vector2Int>();
+            return EmptyReachableSet;
         }
 
         ReachabilityCacheKey key = new ReachabilityCacheKey(
@@ -235,20 +239,20 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
         NavNode startNode = navGraph.GetNode(startPosition);
 
         if (startNode == null
-            || !navGraph.IsStandablePosition(
+            || !navGraph.IsNavigablePosition(
                 startPosition.x,
                 startPosition.y))
         {
             return visited;
         }
 
-        Queue<NavNode> open = new Queue<NavNode>();
-        open.Enqueue(startNode);
+        traversalQueue.Clear();
+        traversalQueue.Enqueue(startNode);
         visited.Add(startPosition);
 
-        while (open.Count > 0)
+        while (traversalQueue.Count > 0)
         {
-            NavNode current = open.Dequeue();
+            NavNode current = traversalQueue.Dequeue();
 
             foreach (NavEdge edge in current.connections)
             {
@@ -264,7 +268,7 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
                 Vector2Int target = edge.targetNode.gridPosition;
                 if (!visited.Add(target)) continue;
 
-                open.Enqueue(edge.targetNode);
+                traversalQueue.Enqueue(edge.targetNode);
             }
         }
 

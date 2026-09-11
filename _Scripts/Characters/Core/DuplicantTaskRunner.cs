@@ -31,6 +31,10 @@ public class DuplicantTaskRunner : MonoBehaviour
     private bool applicationIsQuitting;
     private bool isFinalizingTask;
     private IFoodSource reservedFoodSource;
+    private readonly List<ResourceItem> activeResourceItemBuffer =
+        new List<ResourceItem>();
+    private readonly List<Vector2Int> emptyPathBuffer =
+        new List<Vector2Int>(0);
 
     public TaskFailureReason LastFailureReason { get; private set; }
     public TaskInterruptionOrigin LastInterruptionOrigin { get; private set; }
@@ -634,8 +638,8 @@ public class DuplicantTaskRunner : MonoBehaviour
             yield break;
         }
 
-        ResourceItem[] itemsOnGround = Object.FindObjectsByType<ResourceItem>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-        foreach (var item in itemsOnGround)
+        ResourceItem.CopyActiveItemsTo(activeResourceItemBuffer);
+        foreach (ResourceItem item in activeResourceItemBuffer)
         {
             if (remainingAmount <= 0 || inventory.SpaceRemaining <= 0)
             {
@@ -1434,7 +1438,7 @@ public class DuplicantTaskRunner : MonoBehaviour
         {
             if (controller.gridPosition == fixedInteractionPosition.Value)
             {
-                return new List<Vector2Int>();
+                return emptyPathBuffer;
             }
 
             return PathfindingAStar.Instance?.FindPath(

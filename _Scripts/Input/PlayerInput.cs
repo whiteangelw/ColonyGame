@@ -10,6 +10,7 @@ public enum InputMode
     Cancel
 }
 
+[RequireComponent(typeof(InputContextService))]
 public class PlayerInput : MonoBehaviour
 {
     [Header("Modo e Seleção Atual")]
@@ -41,6 +42,17 @@ public class PlayerInput : MonoBehaviour
 
     private void HandleHotkeys()
     {
+        if (InputContextService.Instance != null
+            && !InputContextService.Instance.IsGameplayKeyboardAllowed)
+        {
+            return;
+        }
+
+        if (Keyboard.current == null)
+        {
+            return;
+        }
+
         // 1. Processa atalhos de Prioridade (1 a 9)
         int pressedPriority = GetPressedPriorityKey();
         if (pressedPriority != -1)

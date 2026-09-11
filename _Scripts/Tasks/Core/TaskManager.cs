@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Unity.Profiling;
 
 public class TaskManager : MonoBehaviour
 {
+    private static readonly ProfilerMarker SelectTaskMarker =
+        new ProfilerMarker("Colony.Tasks.SelectAndAssign");
     public static TaskManager Instance { get; private set; }
 
     public event Action<Task> OnTaskAdded;
@@ -12,8 +15,15 @@ public class TaskManager : MonoBehaviour
     private readonly List<Task> pendingTasks = new List<Task>();
     private readonly Dictionary<TaskType, ITaskHandler> handlers =
         new Dictionary<TaskType, ITaskHandler>();
-    private readonly List<Task> taskCandidateBuffer = new List<Task>();
-    private readonly List<Task> batchCandidateBuffer = new List<Task>();
+    private readonly List<TaskCandidate> taskCandidateBuffer =
+        new List<TaskCandidate>(512);
+    private readonly List<Task> batchCandidateBuffer = new List<Task>(64);
+    private readonly List<Task> invalidTaskBuffer = new List<Task>(64);
+    private Comparison<Task> compareBatchByDistance;
+
+    // O diagnóstico detalhado cria strings a cada candidato rejeitado.
+    // Reative temporariamente no código somente ao investigar construção.
+    private static readonly bool EnableBuildTaskDiagnostics = false;
 
     [Header("Orçamento de busca")]
     [SerializeField, Min(1)] private int maximumTaskSearchesPerFrame = 2;
@@ -23,7 +33,6 @@ public class TaskManager : MonoBehaviour
     private int lastInvalidTaskCleanupFrame = -1;
     private bool isRemovingInvalidTasks;
     private Vector2Int candidateSortOrigin;
-    private DuplicantWorkProfile candidateWorkProfile;
     private GridManager subscribedGrid;
 
     [Header("Transporte em lote")]
@@ -69,6 +78,7 @@ public class TaskManager : MonoBehaviour
         RegisterHandler(new BuildTaskHandler());
         RegisterHandler(new HaulTaskHandler());
         RegisterHandler(new DismantleTaskHandler());
+        compareBatchByDistance = CompareByDistance;
     }
 
     private void Start()
@@ -211,6 +221,7 @@ public class TaskManager : MonoBehaviour
 
         foreach (Task task in matches)
         {
+            PerformanceMetricsService.RecordGlobalObjectSearch();
             DuplicantController[] duplicants = FindObjectsByType<DuplicantController>(
                 FindObjectsInactive.Exclude, FindObjectsSortMode.None);
             foreach (DuplicantController duplicant in duplicants)
@@ -254,6 +265,7 @@ public class TaskManager : MonoBehaviour
     {
         if (task == null || !task.isAssigned) return;
 
+        PerformanceMetricsService.RecordGlobalObjectSearch();
         DuplicantController[] duplicants =
             FindObjectsByType<DuplicantController>(
                 FindObjectsInactive.Exclude,
@@ -287,7 +299,13 @@ public class TaskManager : MonoBehaviour
 
     public Task GetTaskAt(Vector2Int gridPos)
     {
-        return pendingTasks.Find(t => t.gridPosition == gridPos);
+        for (int i = 0; i < pendingTasks.Count; i++)
+        {
+            Task task = pendingTasks[i];
+            if (task != null && task.gridPosition == gridPos) return task;
+        }
+
+        return null;
     }
 
     public Task GetTaskAt(
@@ -295,11 +313,19 @@ public class TaskManager : MonoBehaviour
         TaskType type,
         GridLayer targetLayer)
     {
-        return pendingTasks.Find(task =>
-            task != null
-            && task.gridPosition == gridPos
-            && task.type == type
-            && task.targetLayer == targetLayer);
+        for (int i = 0; i < pendingTasks.Count; i++)
+        {
+            Task task = pendingTasks[i];
+            if (task != null
+                && task.gridPosition == gridPos
+                && task.type == type
+                && task.targetLayer == targetLayer)
+            {
+                return task;
+            }
+        }
+
+        return null;
     }
 
     public bool ContainsTask(Task task)
@@ -328,6 +354,7 @@ public class TaskManager : MonoBehaviour
 
         taskCandidateBuffer.Clear();
         batchCandidateBuffer.Clear();
+        invalidTaskBuffer.Clear();
     }
 
     public bool TryAcquireTaskSearchSlot()
@@ -353,6 +380,32 @@ public class TaskManager : MonoBehaviour
         DuplicantCapabilityProfile profile = null,
         DuplicantWorkProfile workProfile = null)
     {
+        using (SelectTaskMarker.Auto())
+        {
+            long startedAt = PerformanceMetricsService.BeginSample();
+            try
+            {
+                return GetNextTaskForCore(
+                    dupeGridPos,
+                    out calculatedPath,
+                    profile,
+                    workProfile);
+            }
+            finally
+            {
+                PerformanceMetricsService.EndSample(
+                    PerformanceMetric.TaskSelection,
+                    startedAt);
+            }
+        }
+    }
+
+    private Task GetNextTaskForCore(
+        Vector2Int dupeGridPos,
+        out List<Vector2Int> calculatedPath,
+        DuplicantCapabilityProfile profile,
+        DuplicantWorkProfile workProfile)
+    {
         RemoveInvalidTasks();
 
         calculatedPath = null;
@@ -364,38 +417,42 @@ public class TaskManager : MonoBehaviour
             if (task == null || task.isAssigned) continue;
 
             RefreshDynamicTaskPosition(task);
-            taskCandidateBuffer.Add(task);
+            taskCandidateBuffer.Add(new TaskCandidate(
+                task,
+                GetTaskSelectionScore(task, dupeGridPos, workProfile),
+                SquaredGridDistance(dupeGridPos, task.gridPosition)));
         }
 
-        candidateSortOrigin = dupeGridPos;
-        candidateWorkProfile = workProfile;
-        taskCandidateBuffer.Sort(CompareByPriorityAndDistance);
+        taskCandidateBuffer.Sort(TaskCandidateComparer.Instance);
 
-        foreach (Task task in taskCandidateBuffer)
+        for (int i = 0; i < taskCandidateBuffer.Count; i++)
         {
-            if (ReachabilityManager.Instance != null
+            Task task = taskCandidateBuffer[i].Task;
+            bool isGroundHaul = task.type == TaskType.HaulResource
+                && task.targetBlueprint == null;
+
+            // Haul de chão precisa alcançar exatamente o item. Tarefas de
+            // interação são validadas pelos candidatos reais no utility.
+            if (isGroundHaul
+                && ReachabilityManager.Instance != null
                 && ReachabilityManager.Instance.IsReady)
             {
-                bool isGroundHaul = task.type == TaskType.HaulResource
-                    && task.targetBlueprint == null;
-
-                bool canReach = isGroundHaul
-                    ? ReachabilityManager.Instance.CanReachExact(
+                if (!ReachabilityManager.Instance.CanReachExact(
                         dupeGridPos,
                         task.gridPosition,
-                        profile
-                    )
-                    : ReachabilityManager.Instance.CanReach(
-                        dupeGridPos,
-                        task.gridPosition,
-                        profile
-                    );
-
-                if (!canReach) continue;
+                        profile))
+                {
+                    LogTaskRejection(task, "o item exato não está alcançável");
+                    continue;
+                }
             }
 
             ITaskHandler handler = GetHandler(task.type);
-            if (handler == null || !handler.CanExecute(null, task)) continue;
+            if (handler == null || !handler.CanExecute(null, task))
+            {
+                LogTaskRejection(task, "o handler recusou o estado atual");
+                continue;
+            }
 
             List<Vector2Int> path = TaskNavigationUtility.GetPathToTask(
                 dupeGridPos,
@@ -403,9 +460,16 @@ public class TaskManager : MonoBehaviour
                 profile
             );
 
-            if (path == null) continue;
+            if (path == null)
+            {
+                LogTaskRejection(
+                    task,
+                    "nenhum interaction candidate alcançável gerou path");
+                continue;
+            }
 
             task.isAssigned = true;
+            LogTaskRejection(task, "aceita; path encontrado");
             calculatedPath = path;
             return task;
         }
@@ -457,7 +521,7 @@ public class TaskManager : MonoBehaviour
         }
 
         candidateSortOrigin = dupeGridPos;
-        batchCandidateBuffer.Sort(CompareByDistance);
+        batchCandidateBuffer.Sort(compareBatchByDistance);
 
         int checks = Mathf.Min(
             maximumBatchPathChecks,
@@ -503,25 +567,6 @@ public class TaskManager : MonoBehaviour
         int deltaX = a.x - b.x;
         int deltaY = a.y - b.y;
         return deltaX * deltaX + deltaY * deltaY;
-    }
-
-    private int CompareByPriorityAndDistance(Task a, Task b)
-    {
-        int scoreComparison = GetTaskSelectionScore(
-            b,
-            candidateSortOrigin,
-            candidateWorkProfile
-        ).CompareTo(
-            GetTaskSelectionScore(
-                a,
-                candidateSortOrigin,
-                candidateWorkProfile
-            )
-        );
-
-        return scoreComparison != 0
-            ? scoreComparison
-            : CompareByDistance(a, b);
     }
 
     private int CompareByDistance(Task a, Task b)
@@ -596,10 +641,14 @@ public class TaskManager : MonoBehaviour
         }
 
         isRemovingInvalidTasks = true;
-        List<Task> invalidTasks = pendingTasks.FindAll(task =>
-            !IsTaskValid(task));
+        invalidTaskBuffer.Clear();
+        for (int i = 0; i < pendingTasks.Count; i++)
+        {
+            Task task = pendingTasks[i];
+            if (!IsTaskValid(task)) invalidTaskBuffer.Add(task);
+        }
 
-        foreach (Task task in invalidTasks)
+        foreach (Task task in invalidTaskBuffer)
         {
             if (!pendingTasks.Contains(task))
             {
@@ -656,6 +705,13 @@ public class TaskManager : MonoBehaviour
                         BlueprintState.ReadyToBuild;
 
             case TaskType.Dig:
+                if (task.targetBlueprint != null
+                    && task.targetBlueprint.CurrentState !=
+                        BlueprintState.WaitingForClearance)
+                {
+                    return false;
+                }
+
                 return WorldInteractionService.Instance != null
                     && WorldInteractionService.Instance.CanDigTile(
                         task.gridPosition.x,
@@ -670,6 +726,55 @@ public class TaskManager : MonoBehaviour
 
             default:
                 return false;
+        }
+    }
+
+    private void LogTaskRejection(Task task, string reason)
+    {
+        if (!EnableBuildTaskDiagnostics
+            || task == null
+            || task.targetBlueprint == null)
+        {
+            return;
+        }
+
+        ConstructionBlueprint blueprint = task.targetBlueprint;
+        Tile terrain = GridManager.Instance?.GetTile(blueprint.gridPosition);
+        string message =
+            $"[TaskManagerDiagnostic] Task={task.type}; "
+            + $"BlueprintState={blueprint.CurrentState}; "
+            + $"Target={blueprint.gridPosition}; "
+            + $"Terrain={(terrain != null ? terrain.type.ToString() : "fora do grid")}; "
+            + $"Resultado={reason}";
+
+        Debug.Log(message);
+    }
+
+    private readonly struct TaskCandidate
+    {
+        public readonly Task Task;
+        public readonly int Score;
+        public readonly int DistanceSquared;
+
+        public TaskCandidate(Task task, int score, int distanceSquared)
+        {
+            Task = task;
+            Score = score;
+            DistanceSquared = distanceSquared;
+        }
+    }
+
+    private sealed class TaskCandidateComparer : IComparer<TaskCandidate>
+    {
+        public static readonly TaskCandidateComparer Instance =
+            new TaskCandidateComparer();
+
+        public int Compare(TaskCandidate a, TaskCandidate b)
+        {
+            int scoreComparison = b.Score.CompareTo(a.Score);
+            return scoreComparison != 0
+                ? scoreComparison
+                : a.DistanceSquared.CompareTo(b.DistanceSquared);
         }
     }
 
