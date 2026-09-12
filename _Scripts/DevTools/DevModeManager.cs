@@ -39,7 +39,7 @@ public class DevModeManager : Singleton<DevModeManager>
         380f,
         Mathf.Max(300f, Screen.height - 20f)
     );
-    private Rect PerformanceWindowRect => new Rect(270f, 10f, 330f, 700f);
+    private Rect PerformanceWindowRect => new Rect(270f, 10f, 330f, 900f);
 
     private void Update()
     {
@@ -396,6 +396,10 @@ public class DevModeManager : Singleton<DevModeManager>
         GUILayout.Label($"Load clear/grid/entities/post: {snapshot.LastLoadClearWorldMs:F1} / {snapshot.LastLoadRestoreGridMs:F1} / {snapshot.LastLoadRestoreEntitiesMs:F1} / {snapshot.LastLoadPostRestoreMs:F1} ms");
         GUILayout.Label($"World gen: {snapshot.LastWorldGenerationMs:F1} ms");
         GUILayout.Label($"Tilemap / Fog full: {snapshot.LastTilemapFullRefreshMs:F1} / {snapshot.LastFogFullRefreshMs:F1} ms");
+        GUILayout.Label($"Tilemap regional avg/max: {snapshot.TilemapRegionalAverageMs:F3} / {snapshot.TilemapRegionalMaximumMs:F3} ms");
+        GUILayout.Label($"Tilemap cells/pending: {snapshot.TilemapRegionalCellsProcessed:N0} / {snapshot.TilemapRegionalCellsPendingPeak:N0} / {snapshot.TilemapRegionalRegionsPendingPeak:N0} reg.");
+        GUILayout.Label($"Fog regional avg/max: {snapshot.FogRegionalAverageMs:F3} / {snapshot.FogRegionalMaximumMs:F3} ms");
+        GUILayout.Label($"Fog cells/pending: {snapshot.FogRegionalCellsProcessed:N0} / {snapshot.FogRegionalCellsPendingPeak:N0} / {snapshot.FogRegionalRegionsPendingPeak:N0} reg.");
         GUILayout.Space(4f);
         GUILayout.Label($"Liquid avg/max: {snapshot.LiquidVisualizerAverageMs:F3} / {snapshot.LiquidVisualizerMaximumMs:F3} ms");
         GUILayout.Label($"Liquid cells: {snapshot.LiquidCellsProcessed:N0}");

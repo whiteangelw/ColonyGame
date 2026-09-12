@@ -39,6 +39,8 @@ public class DuplicantController : MonoBehaviour
         : 1f;
 
     private bool isRecovering;
+    private bool hasLastFogRevealPosition;
+    private Vector2Int lastFogRevealPosition;
 
     public int GetWorkAffinity(TaskType taskType)
     {
@@ -78,6 +80,7 @@ public class DuplicantController : MonoBehaviour
 
     private void OnEnable()
     {
+        hasLastFogRevealPosition = false;
         PerformanceMetricsService.ChangeActiveDuplicants(1);
         ReachabilityManager.Instance?.RegisterDuplicant(this);
     }
@@ -104,7 +107,15 @@ public class DuplicantController : MonoBehaviour
         Vector2Int visualGridPosition =
             GridManager.Instance.WorldToGridPosition(transform.position);
 
-        FogOfWarManager.Instance?.RevealArea(visualGridPosition);
+        FogOfWarManager fog = FogOfWarManager.Instance;
+        if (fog != null
+            && (!hasLastFogRevealPosition
+                || visualGridPosition != lastFogRevealPosition))
+        {
+            fog.RevealArea(visualGridPosition);
+            lastFogRevealPosition = visualGridPosition;
+            hasLastFogRevealPosition = true;
+        }
         CheckAndRescueIfTrapped(visualGridPosition);
 
         // Queda em Idle caso o chão desapareça

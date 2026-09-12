@@ -25,7 +25,9 @@ public enum PerformanceMetric
     LoadPostRestore,
     WorldGeneration,
     TilemapFullRefresh,
-    FogFullRefresh
+    TilemapRegionalUpdate,
+    FogFullRefresh,
+    FogRegionalUpdate
 }
 
 public readonly struct PerformanceMetricsSnapshot
@@ -71,7 +73,17 @@ public readonly struct PerformanceMetricsSnapshot
     public readonly float LastLoadPostRestoreMs;
     public readonly float LastWorldGenerationMs;
     public readonly float LastTilemapFullRefreshMs;
+    public readonly float TilemapRegionalAverageMs;
+    public readonly float TilemapRegionalMaximumMs;
+    public readonly int TilemapRegionalCellsProcessed;
+    public readonly int TilemapRegionalCellsPendingPeak;
+    public readonly int TilemapRegionalRegionsPendingPeak;
     public readonly float LastFogFullRefreshMs;
+    public readonly float FogRegionalAverageMs;
+    public readonly float FogRegionalMaximumMs;
+    public readonly int FogRegionalCellsProcessed;
+    public readonly int FogRegionalCellsPendingPeak;
+    public readonly int FogRegionalRegionsPendingPeak;
 
     public PerformanceMetricsSnapshot(
         float fps, float frameMs, float pathRate, float pathAverageMs,
@@ -94,7 +106,15 @@ public readonly struct PerformanceMetricsSnapshot
         float lastLoadClearWorldMs, float lastLoadRestoreGridMs,
         float lastLoadRestoreEntitiesMs, float lastLoadPostRestoreMs,
         float lastWorldGenerationMs, float lastTilemapFullRefreshMs,
-        float lastFogFullRefreshMs)
+        float tilemapRegionalAverageMs, float tilemapRegionalMaximumMs,
+        int tilemapRegionalCellsProcessed,
+        int tilemapRegionalCellsPendingPeak,
+        int tilemapRegionalRegionsPendingPeak,
+        float lastFogFullRefreshMs,
+        float fogRegionalAverageMs, float fogRegionalMaximumMs,
+        int fogRegionalCellsProcessed,
+        int fogRegionalCellsPendingPeak,
+        int fogRegionalRegionsPendingPeak)
     {
         FramesPerSecond = fps;
         FrameTimeMs = frameMs;
@@ -137,7 +157,17 @@ public readonly struct PerformanceMetricsSnapshot
         LastLoadPostRestoreMs = lastLoadPostRestoreMs;
         LastWorldGenerationMs = lastWorldGenerationMs;
         LastTilemapFullRefreshMs = lastTilemapFullRefreshMs;
+        TilemapRegionalAverageMs = tilemapRegionalAverageMs;
+        TilemapRegionalMaximumMs = tilemapRegionalMaximumMs;
+        TilemapRegionalCellsProcessed = tilemapRegionalCellsProcessed;
+        TilemapRegionalCellsPendingPeak = tilemapRegionalCellsPendingPeak;
+        TilemapRegionalRegionsPendingPeak = tilemapRegionalRegionsPendingPeak;
         LastFogFullRefreshMs = lastFogFullRefreshMs;
+        FogRegionalAverageMs = fogRegionalAverageMs;
+        FogRegionalMaximumMs = fogRegionalMaximumMs;
+        FogRegionalCellsProcessed = fogRegionalCellsProcessed;
+        FogRegionalCellsPendingPeak = fogRegionalCellsPendingPeak;
+        FogRegionalRegionsPendingPeak = fogRegionalRegionsPendingPeak;
     }
 }
 
@@ -196,7 +226,19 @@ public sealed class PerformanceMetricsService : MonoBehaviour
     private float lastLoadPostRestoreMs;
     private float lastWorldGenerationMs;
     private float lastTilemapFullRefreshMs;
+    private int tilemapRegionalSamples;
+    private double tilemapRegionalTotalMs;
+    private double tilemapRegionalMaximumMs;
+    private int tilemapRegionalCellsProcessed;
+    private int tilemapRegionalCellsPendingPeak;
+    private int tilemapRegionalRegionsPendingPeak;
     private float lastFogFullRefreshMs;
+    private int fogRegionalSamples;
+    private double fogRegionalTotalMs;
+    private double fogRegionalMaximumMs;
+    private int fogRegionalCellsProcessed;
+    private int fogRegionalCellsPendingPeak;
+    private int fogRegionalRegionsPendingPeak;
     private ProfilerRecorder gcAllocatedRecorder;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
@@ -273,7 +315,17 @@ public sealed class PerformanceMetricsService : MonoBehaviour
             lastLoadClearWorldMs, lastLoadRestoreGridMs,
             lastLoadRestoreEntitiesMs, lastLoadPostRestoreMs,
             lastWorldGenerationMs, lastTilemapFullRefreshMs,
-            lastFogFullRefreshMs);
+            Average(tilemapRegionalTotalMs, tilemapRegionalSamples),
+            (float)tilemapRegionalMaximumMs,
+            tilemapRegionalCellsProcessed,
+            tilemapRegionalCellsPendingPeak,
+            tilemapRegionalRegionsPendingPeak,
+            lastFogFullRefreshMs,
+            Average(fogRegionalTotalMs, fogRegionalSamples),
+            (float)fogRegionalMaximumMs,
+            fogRegionalCellsProcessed,
+            fogRegionalCellsPendingPeak,
+            fogRegionalRegionsPendingPeak);
 
         sampleFrames = pathRequests = pathSamples = taskSamples = 0;
         brainTicks = needsTicks = 0;
@@ -282,9 +334,17 @@ public sealed class PerformanceMetricsService : MonoBehaviour
         liquidVisualizerSamples = liquidCellsProcessed = 0;
         liquidSimulationSamples = liquidBufferResizes = 0;
         liquidSimulationCells = 0L;
+        tilemapRegionalSamples = tilemapRegionalCellsProcessed = 0;
+        tilemapRegionalCellsPendingPeak = 0;
+        tilemapRegionalRegionsPendingPeak = 0;
+        fogRegionalSamples = fogRegionalCellsProcessed = 0;
+        fogRegionalCellsPendingPeak = 0;
+        fogRegionalRegionsPendingPeak = 0;
         pathTotalMs = pathMaximumMs = taskTotalMs = taskMaximumMs = 0d;
         liquidVisualizerTotalMs = liquidVisualizerMaximumMs = 0d;
         liquidSimulationTotalMs = liquidSimulationMaximumMs = 0d;
+        tilemapRegionalTotalMs = tilemapRegionalMaximumMs = 0d;
+        fogRegionalTotalMs = fogRegionalMaximumMs = 0d;
         sampleStartTime = Time.unscaledTime;
     }
 
@@ -349,7 +409,21 @@ public sealed class PerformanceMetricsService : MonoBehaviour
             case PerformanceMetric.LoadPostRestore: lastLoadPostRestoreMs = (float)milliseconds; break;
             case PerformanceMetric.WorldGeneration: lastWorldGenerationMs = (float)milliseconds; break;
             case PerformanceMetric.TilemapFullRefresh: lastTilemapFullRefreshMs = (float)milliseconds; break;
+            case PerformanceMetric.TilemapRegionalUpdate:
+                tilemapRegionalSamples++;
+                tilemapRegionalTotalMs += milliseconds;
+                tilemapRegionalMaximumMs = Math.Max(
+                    tilemapRegionalMaximumMs,
+                    milliseconds);
+                break;
             case PerformanceMetric.FogFullRefresh: lastFogFullRefreshMs = (float)milliseconds; break;
+            case PerformanceMetric.FogRegionalUpdate:
+                fogRegionalSamples++;
+                fogRegionalTotalMs += milliseconds;
+                fogRegionalMaximumMs = Math.Max(
+                    fogRegionalMaximumMs,
+                    milliseconds);
+                break;
         }
     }
 #endif
@@ -410,6 +484,46 @@ public sealed class PerformanceMetricsService : MonoBehaviour
             0,
             pendingDepthColumns);
         EndSample(PerformanceMetric.LiquidVisualization, startedAt);
+#endif
+    }
+
+    public static void RecordTilemapRegionalWork(
+        long startedAt,
+        int processedCells,
+        int pendingCells,
+        int pendingRegions)
+    {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        if (Instance == null || !Instance.collectionEnabled) return;
+
+        Instance.tilemapRegionalCellsProcessed += Mathf.Max(0, processedCells);
+        Instance.tilemapRegionalCellsPendingPeak = Mathf.Max(
+            Instance.tilemapRegionalCellsPendingPeak,
+            pendingCells);
+        Instance.tilemapRegionalRegionsPendingPeak = Mathf.Max(
+            Instance.tilemapRegionalRegionsPendingPeak,
+            pendingRegions);
+        EndSample(PerformanceMetric.TilemapRegionalUpdate, startedAt);
+#endif
+    }
+
+    public static void RecordFogRegionalWork(
+        long startedAt,
+        int processedCells,
+        int pendingCells,
+        int pendingRegions)
+    {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        if (Instance == null || !Instance.collectionEnabled) return;
+
+        Instance.fogRegionalCellsProcessed += Mathf.Max(0, processedCells);
+        Instance.fogRegionalCellsPendingPeak = Mathf.Max(
+            Instance.fogRegionalCellsPendingPeak,
+            pendingCells);
+        Instance.fogRegionalRegionsPendingPeak = Mathf.Max(
+            Instance.fogRegionalRegionsPendingPeak,
+            pendingRegions);
+        EndSample(PerformanceMetric.FogRegionalUpdate, startedAt);
 #endif
     }
 

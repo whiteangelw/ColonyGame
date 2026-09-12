@@ -10,6 +10,8 @@ public class TilemapVisualizer : MonoBehaviour
         new ProfilerMarker("TilemapVisualizer.FullRefresh");
     private static readonly ProfilerMarker FullRefreshBatchMarker =
         new ProfilerMarker("TilemapVisualizer.FullRefreshBatch");
+    private static readonly ProfilerMarker RegionalRefreshMarker =
+        new ProfilerMarker("TilemapVisualizer.RegionalRefreshBatch");
     [System.Serializable]
     public struct TileMapping
     {
@@ -24,13 +26,27 @@ public class TilemapVisualizer : MonoBehaviour
     [Header("Carregamento incremental")]
     [SerializeField, Min(1)] private int fullRefreshColumnsPerFrame = 32;
 
+    [Header("P5E - Atualização regional")]
+    [Tooltip("Limite de células alteradas processadas por frame neste Tilemap.")]
+    [SerializeField, Min(1)] private int maximumDirtyCellsPerFrame = 2048;
+    [Tooltip("Fatia máxima processada por região antes de passar para a próxima.")]
+    [SerializeField, Min(1)] private int maximumDirtyCellsPerRegionPass = 256;
+
     [Header("Fallback visual legado")]
     [Tooltip("Usado apenas quando o conteúdo não possui BuildDefinitionSO/Tile Asset.")]
     [SerializeField] private List<TileMapping> mappingList = new List<TileMapping>();
 
     private Dictionary<TileType, TileBase> tileDictionary;
+    private readonly Dictionary<int, Queue<int>> pendingCellsByRegion =
+        new Dictionary<int, Queue<int>>();
+    private readonly Queue<int> pendingRegionOrder = new Queue<int>();
+    private readonly HashSet<int> pendingCellKeys = new HashSet<int>();
+    private readonly Stack<Queue<int>> cellQueuePool = new Stack<Queue<int>>();
     private GridManager subscribedGridManager;
     private bool missingTilemapLogged;
+
+    public int PendingVisualCellCount => pendingCellKeys.Count;
+    public int PendingVisualRegionCount => pendingCellsByRegion.Count;
 
     private void Awake()
     {
@@ -66,10 +82,18 @@ public class TilemapVisualizer : MonoBehaviour
             subscribedGridManager.OnLayerTileChanged -= OnLayerTileChangedHandler;
             subscribedGridManager.OnGridRebuilt -= HandleGridRebuilt;
         }
+
+        ClearPendingVisualChanges();
+    }
+
+    private void LateUpdate()
+    {
+        ProcessPendingVisualChanges();
     }
 
     private void HandleGridRebuilt()
     {
+        ClearPendingVisualChanges();
         if (!SaveGameRuntime.IsLoading)
         {
             RenderFullGrid();
@@ -81,6 +105,7 @@ public class TilemapVisualizer : MonoBehaviour
         GridManager grid = GridManager.Instance;
         if (grid == null || !TryGetTargetTilemap()) yield break;
 
+        ClearPendingVisualChanges();
         targetTilemap.ClearAllTiles();
         int columnsPerFrame = Mathf.Max(1, fullRefreshColumnsPerFrame);
 
@@ -119,13 +144,130 @@ public class TilemapVisualizer : MonoBehaviour
     private void OnTileChangedHandler(int x, int y, TileType newType)
     {
         if (visualizedLayer != GridLayer.Terrain && visualizedLayer != GridLayer.Structure) return;
-        RenderCell(x, y, GridManager.Instance.GetTileType(x, y, visualizedLayer));
+        QueueVisualChange(x, y);
     }
 
     private void OnLayerTileChangedHandler(int x, int y, GridLayer layer, TileType newType)
     {
         if (layer != visualizedLayer) return;
-        RenderCell(x, y, newType);
+        QueueVisualChange(x, y);
+    }
+
+    private void QueueVisualChange(int x, int y)
+    {
+        GridManager grid = subscribedGridManager;
+        if (grid == null || !grid.IsGridReady || !grid.IsInsideGrid(x, y)) return;
+
+        int cellKey = x + y * grid.Width;
+        if (!pendingCellKeys.Add(cellKey)) return;
+
+        if (!grid.Regions.TryGetByCell(x, y, out WorldRegionState region))
+        {
+            pendingCellKeys.Remove(cellKey);
+            return;
+        }
+
+        int regionKey = region.Coordinate.X
+            + region.Coordinate.Y * grid.RegionColumns;
+        if (!pendingCellsByRegion.TryGetValue(regionKey, out Queue<int> cells))
+        {
+            cells = RentCellQueue();
+            pendingCellsByRegion.Add(regionKey, cells);
+            pendingRegionOrder.Enqueue(regionKey);
+        }
+
+        cells.Enqueue(cellKey);
+    }
+
+    private void ProcessPendingVisualChanges()
+    {
+        if (pendingCellKeys.Count == 0) return;
+
+        GridManager grid = subscribedGridManager;
+        if (grid == null || !grid.IsGridReady || !TryGetTargetTilemap()) return;
+
+        int pendingCellsBeforeProcessing = pendingCellKeys.Count;
+        int pendingRegionsBeforeProcessing = pendingCellsByRegion.Count;
+        int processedCells = 0;
+        int budget = Mathf.Max(1, maximumDirtyCellsPerFrame);
+        long startedAt = PerformanceMetricsService.BeginSample();
+
+        using (RegionalRefreshMarker.Auto())
+        {
+            while (processedCells < budget && pendingRegionOrder.Count > 0)
+            {
+                int regionKey = pendingRegionOrder.Dequeue();
+                if (!pendingCellsByRegion.TryGetValue(
+                        regionKey,
+                        out Queue<int> cells))
+                {
+                    continue;
+                }
+
+                int regionBudget = Mathf.Min(
+                    maximumDirtyCellsPerRegionPass,
+                    budget - processedCells);
+                int regionProcessedCells = 0;
+
+                while (regionProcessedCells < regionBudget && cells.Count > 0)
+                {
+                    int cellKey = cells.Dequeue();
+                    pendingCellKeys.Remove(cellKey);
+                    int x = cellKey % grid.Width;
+                    int y = cellKey / grid.Width;
+                    RenderCell(
+                        x,
+                        y,
+                        grid.GetTileType(x, y, visualizedLayer));
+                    processedCells++;
+                    regionProcessedCells++;
+                }
+
+                if (cells.Count == 0)
+                {
+                    pendingCellsByRegion.Remove(regionKey);
+                    ReturnCellQueue(cells);
+                }
+                else
+                {
+                    // Round-robin: uma região grande não bloqueia as demais.
+                    pendingRegionOrder.Enqueue(regionKey);
+                }
+            }
+        }
+
+        PerformanceMetricsService.RecordTilemapRegionalWork(
+            startedAt,
+            processedCells,
+            Mathf.Max(pendingCellsBeforeProcessing, pendingCellKeys.Count),
+            Mathf.Max(
+                pendingRegionsBeforeProcessing,
+                pendingCellsByRegion.Count));
+    }
+
+    private Queue<int> RentCellQueue()
+    {
+        return cellQueuePool.Count > 0
+            ? cellQueuePool.Pop()
+            : new Queue<int>();
+    }
+
+    private void ReturnCellQueue(Queue<int> cells)
+    {
+        cells.Clear();
+        cellQueuePool.Push(cells);
+    }
+
+    private void ClearPendingVisualChanges()
+    {
+        foreach (Queue<int> cells in pendingCellsByRegion.Values)
+        {
+            ReturnCellQueue(cells);
+        }
+
+        pendingCellsByRegion.Clear();
+        pendingRegionOrder.Clear();
+        pendingCellKeys.Clear();
     }
 
     private void RenderCell(int x, int y, TileType newType)
@@ -144,6 +286,7 @@ public class TilemapVisualizer : MonoBehaviour
     {
         if (GridManager.Instance == null || !TryGetTargetTilemap()) return;
 
+        ClearPendingVisualChanges();
         long startedAt = PerformanceMetricsService.BeginSample();
         using (FullRefreshMarker.Auto())
         {
