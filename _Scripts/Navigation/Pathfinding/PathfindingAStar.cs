@@ -6,6 +6,7 @@ public class PathfindingAStar : MonoBehaviour
 {
     private static readonly ProfilerMarker FindPathMarker =
         new ProfilerMarker("Colony.Pathfinding.FindPath");
+
     public static PathfindingAStar Instance { get; private set; }
 
     private NavGraphGenerator navGraph;
@@ -15,7 +16,6 @@ public class PathfindingAStar : MonoBehaviour
     private PathNodeAdapter[,] nodeAdapterGrid;
 
     private int currentSearchId;
-
     private int initializedWidth;
     private int initializedHeight;
 
@@ -34,7 +34,6 @@ public class PathfindingAStar : MonoBehaviour
     private void Start()
     {
         navGraph = NavGraphGenerator.Instance;
-
         InitializeAdapterGrid();
     }
 
@@ -62,21 +61,15 @@ public class PathfindingAStar : MonoBehaviour
         initializedWidth = width;
         initializedHeight = height;
 
-        openHeap = new MinHeap<PathNodeAdapter>(
-            width * height
-        );
+        openHeap = new MinHeap<PathNodeAdapter>(width * height);
 
-        nodeAdapterGrid = new PathNodeAdapter[
-            width,
-            height
-        ];
+        nodeAdapterGrid = new PathNodeAdapter[width, height];
 
         for (int x = 0; x < width; x++)
         {
             for (int y = 0; y < height; y++)
             {
-                nodeAdapterGrid[x, y] =
-                    new PathNodeAdapter();
+                nodeAdapterGrid[x, y] = new PathNodeAdapter();
             }
         }
 
@@ -92,6 +85,7 @@ public class PathfindingAStar : MonoBehaviour
         {
             PerformanceMetricsService.RecordPathRequest();
             long startedAt = PerformanceMetricsService.BeginSample();
+
             try
             {
                 return FindPathCore(startPos, targetPos, profile);
@@ -110,6 +104,15 @@ public class PathfindingAStar : MonoBehaviour
         Vector2Int targetPos,
         DuplicantCapabilityProfile profile)
     {
+        if (navGraph == null)
+        {
+            navGraph = NavGraphGenerator.Instance;
+        }
+
+        // Uma busca nunca usa conexões antigas, mesmo que o orçamento
+        // regional normal ainda não tenha processado tudo neste frame.
+        navGraph?.FlushPendingNavigationUpdates();
+
         if (!CanSearch())
         {
             return null;
@@ -123,6 +126,7 @@ public class PathfindingAStar : MonoBehaviour
 
         NavNode startNode = navGraph.GetNode(startPos);
         NavNode targetNode = navGraph.GetNode(targetPos);
+
         DuplicantCapabilityProfile effectiveProfile =
             profile != null ? profile : navGraph.DefaultProfile;
 
@@ -133,7 +137,7 @@ public class PathfindingAStar : MonoBehaviour
             return null;
         }
 
-        // O destino pode estar apoiado no chão ou na própria Ladder.
+        // O destino pode estar apoiado no chão ou na própria escada.
         if (!navGraph.IsNavigablePosition(
                 targetPos.x,
                 targetPos.y))
@@ -141,28 +145,26 @@ public class PathfindingAStar : MonoBehaviour
             return null;
         }
 
-        // Reinicializa os adapters antes que o identificador da busca se repita.
+        // Reinicializa os adapters antes que o identificador se repita.
         if (currentSearchId == int.MaxValue)
         {
             InitializeAdapterGrid();
         }
 
         currentSearchId++;
-
         openHeap.Clear();
 
-        PathNodeAdapter startAdapter =
-            GetAdapter(startNode);
+        PathNodeAdapter startAdapter = GetAdapter(startNode);
 
         startAdapter.ResetForSearch(
             currentSearchId,
-            startNode
-        );
+            startNode);
 
         startAdapter.gCost = 0f;
-
-        startAdapter.hCost =
-            GetHeuristic(startPos, targetPos, effectiveProfile);
+        startAdapter.hCost = GetHeuristic(
+            startPos,
+            targetPos,
+            effectiveProfile);
 
         startAdapter.cameFrom = null;
         startAdapter.isInOpenSet = true;
@@ -171,8 +173,7 @@ public class PathfindingAStar : MonoBehaviour
 
         while (openHeap.Count > 0)
         {
-            PathNodeAdapter current =
-                openHeap.RemoveFirst();
+            PathNodeAdapter current = openHeap.RemoveFirst();
 
             current.isInOpenSet = false;
 
@@ -185,14 +186,10 @@ public class PathfindingAStar : MonoBehaviour
 
             if (current.Node == targetNode)
             {
-                return RetracePath(
-                    startAdapter,
-                    current
-                );
+                return RetracePath(startAdapter, current);
             }
 
-            foreach (NavEdge edge
-                     in current.Node.connections)
+            foreach (NavEdge edge in current.Node.connections)
             {
                 if (edge.targetNode == null)
                 {
@@ -207,13 +204,11 @@ public class PathfindingAStar : MonoBehaviour
                     continue;
                 }
 
-                PathNodeAdapter neighbor =
-                    GetAdapter(edge.targetNode);
+                PathNodeAdapter neighbor = GetAdapter(edge.targetNode);
 
                 neighbor.ResetForSearch(
                     currentSearchId,
-                    edge.targetNode
-                );
+                    edge.targetNode);
 
                 if (neighbor.isClosed)
                 {
@@ -224,8 +219,7 @@ public class PathfindingAStar : MonoBehaviour
                     effectiveProfile.GetEdgeMovementCost(
                         edge.moveType,
                         current.Node.gridPosition,
-                        edge.targetNode.gridPosition
-                    );
+                        edge.targetNode.gridPosition);
 
                 float newGCost = current.gCost + traversalCost;
 
@@ -236,19 +230,16 @@ public class PathfindingAStar : MonoBehaviour
 
                 neighbor.gCost = newGCost;
 
-                neighbor.hCost =
-                    GetHeuristic(
-                        neighbor.Node.gridPosition,
-                        targetPos,
-                        effectiveProfile
-                    );
+                neighbor.hCost = GetHeuristic(
+                    neighbor.Node.gridPosition,
+                    targetPos,
+                    effectiveProfile);
 
                 neighbor.cameFrom = current;
 
                 if (!neighbor.isInOpenSet)
                 {
                     neighbor.isInOpenSet = true;
-
                     openHeap.Add(neighbor);
                 }
                 else
@@ -292,8 +283,7 @@ public class PathfindingAStar : MonoBehaviour
 
     private bool GridSizeChanged()
     {
-        GridManager gridManager =
-            GridManager.Instance;
+        GridManager gridManager = GridManager.Instance;
 
         return gridManager.width != initializedWidth
             || gridManager.height != initializedHeight;
@@ -301,8 +291,7 @@ public class PathfindingAStar : MonoBehaviour
 
     private bool IsInsideGrid(Vector2Int position)
     {
-        GridManager gridManager =
-            GridManager.Instance;
+        GridManager gridManager = GridManager.Instance;
 
         return position.x >= 0
             && position.x < gridManager.width
@@ -312,13 +301,9 @@ public class PathfindingAStar : MonoBehaviour
 
     private PathNodeAdapter GetAdapter(NavNode node)
     {
-        Vector2Int position =
-            node.gridPosition;
+        Vector2Int position = node.gridPosition;
 
-        return nodeAdapterGrid[
-            position.x,
-            position.y
-        ];
+        return nodeAdapterGrid[position.x, position.y];
     }
 
     private float GetHeuristic(
@@ -337,8 +322,8 @@ public class PathfindingAStar : MonoBehaviour
         PathNodeAdapter end)
     {
         PathNodeAdapter current = end;
-        int maxSteps =
-            initializedWidth * initializedHeight;
+
+        int maxSteps = initializedWidth * initializedHeight;
         int pathLength = 0;
 
         while (current != start)
@@ -362,7 +347,7 @@ public class PathfindingAStar : MonoBehaviour
             }
         }
 
-        // A capacidade exata evita os crescimentos 4, 8, 16... da List.
+        // Evita crescimentos progressivos da List durante cada busca.
         List<Vector2Int> path = new List<Vector2Int>(pathLength);
         current = end;
 
@@ -377,16 +362,14 @@ public class PathfindingAStar : MonoBehaviour
         return path;
     }
 
-    private class PathNodeAdapter
-        : IHeapItem<PathNodeAdapter>
+    private class PathNodeAdapter : IHeapItem<PathNodeAdapter>
     {
         public NavNode Node { get; private set; }
 
         public float gCost;
         public float hCost;
 
-        public float FCost =>
-            gCost + hCost;
+        public float FCost => gCost + hCost;
 
         public PathNodeAdapter cameFrom;
 
@@ -407,7 +390,6 @@ public class PathfindingAStar : MonoBehaviour
             }
 
             lastSearchId = searchId;
-
             Node = node;
 
             gCost = float.MaxValue;
@@ -421,16 +403,13 @@ public class PathfindingAStar : MonoBehaviour
             HeapIndex = -1;
         }
 
-        public int CompareTo(
-            PathNodeAdapter other)
+        public int CompareTo(PathNodeAdapter other)
         {
-            int compare =
-                FCost.CompareTo(other.FCost);
+            int compare = FCost.CompareTo(other.FCost);
 
             if (compare == 0)
             {
-                compare =
-                    hCost.CompareTo(other.hCost);
+                compare = hCost.CompareTo(other.hCost);
             }
 
             return compare;

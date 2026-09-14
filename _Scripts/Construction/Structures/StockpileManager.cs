@@ -6,21 +6,30 @@ public class StockpileManager : MonoBehaviour
 {
     private static readonly ResourceType[] AllResourceTypes =
         (ResourceType[])Enum.GetValues(typeof(ResourceType));
+
     public static StockpileManager Instance { get; private set; }
 
     private readonly Dictionary<ResourceType, int> resources =
         new Dictionary<ResourceType, int>();
+
     private readonly Dictionary<ResourceType, int> reservedResources =
         new Dictionary<ResourceType, int>();
+
     private readonly HashSet<ResourceType> unlockedResources =
         new HashSet<ResourceType>();
+
     private readonly Dictionary<ResourceType, int> refreshTotals =
         new Dictionary<ResourceType, int>();
+
     private readonly List<ResourceItem> groundItemBuffer =
         new List<ResourceItem>();
 
+    private readonly List<DuplicantInventory> duplicantInventoryBuffer =
+        new List<DuplicantInventory>();
+
     [Header("Performance")]
-    [SerializeField, Min(0.02f)] private float refreshInterval = 0.1f;
+    [SerializeField, Min(0.02f)]
+    private float refreshInterval = 0.1f;
 
     private bool refreshPending;
     private float nextAllowedRefreshTime;
@@ -84,7 +93,9 @@ public class StockpileManager : MonoBehaviour
     public void RefreshReachableResources()
     {
         refreshPending = false;
-        nextAllowedRefreshTime = Time.unscaledTime + refreshInterval;
+
+        nextAllowedRefreshTime =
+            Time.unscaledTime + refreshInterval;
 
         ResetRefreshTotals();
 
@@ -98,10 +109,10 @@ public class StockpileManager : MonoBehaviour
             int newAmount = refreshTotals[type];
 
             resources[type] = newAmount;
+
             reservedResources[type] = Mathf.Min(
                 reservedResources[type],
-                newAmount
-            );
+                newAmount);
 
             if (newAmount > 0 && unlockedResources.Add(type))
             {
@@ -110,7 +121,9 @@ public class StockpileManager : MonoBehaviour
 
             if (previousAmount != newAmount)
             {
-                GameEvents.TriggerResourceAmountChanged(type, newAmount);
+                GameEvents.TriggerResourceAmountChanged(
+                    type,
+                    newAmount);
             }
         }
     }
@@ -137,8 +150,7 @@ public class StockpileManager : MonoBehaviour
 
             Vector2Int position = GridManager.Instance != null
                 ? GridManager.Instance.WorldToGridPosition(
-                    item.transform.position
-                )
+                    item.transform.position)
                 : Vector2Int.zero;
 
             if (IsReachable(position))
@@ -175,14 +187,11 @@ public class StockpileManager : MonoBehaviour
     private void CountDuplicantInventories(
         Dictionary<ResourceType, int> totals)
     {
-        PerformanceMetricsService.RecordGlobalObjectSearch();
-        DuplicantInventory[] inventories =
-            FindObjectsByType<DuplicantInventory>(
-                FindObjectsInactive.Exclude,
-                FindObjectsSortMode.None
-            );
+        DuplicantInventory.CopyActiveInventoriesTo(
+            duplicantInventoryBuffer);
 
-        foreach (DuplicantInventory inventory in inventories)
+        foreach (DuplicantInventory inventory
+                 in duplicantInventoryBuffer)
         {
             if (inventory != null
                 && inventory.HasItem
@@ -198,7 +207,8 @@ public class StockpileManager : MonoBehaviour
     {
         return ReachabilityManager.Instance == null
             || !ReachabilityManager.Instance.IsReady
-            || ReachabilityManager.Instance.CanAnyDuplicantReach(position);
+            || ReachabilityManager.Instance.CanAnyDuplicantReach(
+                position);
     }
 
     public bool HasResource(ResourceType type, int amount)
@@ -209,10 +219,12 @@ public class StockpileManager : MonoBehaviour
     public int GetAvailableAmount(ResourceType type)
     {
         int total = GetAmount(type);
+
         int reserved = reservedResources.TryGetValue(
             type,
-            out int reservedAmount
-        ) ? reservedAmount : 0;
+            out int reservedAmount)
+            ? reservedAmount
+            : 0;
 
         return Mathf.Max(0, total - reserved);
     }
@@ -225,6 +237,7 @@ public class StockpileManager : MonoBehaviour
         }
 
         reservedResources[type] += amount;
+
         return true;
     }
 
@@ -237,26 +250,34 @@ public class StockpileManager : MonoBehaviour
 
         reservedResources[type] = Mathf.Max(
             0,
-            reservedResources[type] - amount
-        );
+            reservedResources[type] - amount);
     }
 
-    public bool CommitReservedResource(ResourceType type, int amount)
+    public bool CommitReservedResource(
+        ResourceType type,
+        int amount)
     {
         if (amount <= 0
-            || !reservedResources.TryGetValue(type, out int reserved)
+            || !reservedResources.TryGetValue(
+                type,
+                out int reserved)
             || reserved < amount)
         {
             return false;
         }
 
         reservedResources[type] -= amount;
+
         return true;
     }
 
     public int GetAmount(ResourceType type)
     {
-        return resources.TryGetValue(type, out int amount) ? amount : 0;
+        return resources.TryGetValue(
+            type,
+            out int amount)
+            ? amount
+            : 0;
     }
 
     public bool HasUnlockedResource(ResourceType type)

@@ -12,74 +12,90 @@ public class DuplicantTaskRunner : MonoBehaviour
     private DuplicantController controller;
     private DuplicantMovement movement;
     private DuplicantInventory inventory;
+    private DuplicantPathFollower pathFollower;
+    private DuplicantResourceCollector resourceCollector;
 
     private bool pathFollowSucceeded;
-    private ConstructionBlueprint reservedBlueprint;
-    private int reservedDeliveryAmount;
-    private ResourceType reservedResourceType;
-    private int reservedResourceAmount;
-    private IStorage reservedStorage;
-    private ResourceType reservedStorageType;
-    private int reservedStorageAmount;
-    private Vector2Int reservedStoragePosition;
+    private readonly DuplicantStorageReservation storageReservation =
+        new DuplicantStorageReservation();
     private Task activeTask;
-    private Task reservedAdditionalHaulTask;
-    private ResourceItem activeGroundItem;
-    private ResourceItem reservedGroundItem;
-    private bool groundItemCollected;
-    private bool failureRecordedForActiveTask;
+    private readonly DuplicantGroundHaulState groundHaulState =
+        new DuplicantGroundHaulState();
+    private readonly DuplicantTaskDiagnostics diagnostics =
+     new DuplicantTaskDiagnostics();
     private bool applicationIsQuitting;
     private bool isFinalizingTask;
     private IFoodSource reservedFoodSource;
-    private readonly List<ResourceItem> activeResourceItemBuffer =
-        new List<ResourceItem>();
-    private readonly List<Vector2Int> emptyPathBuffer =
-        new List<Vector2Int>(0);
-
-    public TaskFailureReason LastFailureReason { get; private set; }
-    public TaskInterruptionOrigin LastInterruptionOrigin { get; private set; }
-    public string LastFailureDetails { get; private set; } = "Nenhuma";
-    public float LastFailureTime { get; private set; } = -1f;
-    public Vector2Int? DiagnosticDestination { get; private set; }
-    public int DiagnosticPathLength { get; private set; }
-    public int DiagnosticPathIndex { get; private set; }
-    public int DiagnosticReplanCount { get; private set; }
-    public int DiagnosticMaxReplans { get; private set; }
+private readonly DuplicantBlueprintDeliveryPlan
+    blueprintDeliveryPlan =
+        new DuplicantBlueprintDeliveryPlan();
+    public TaskFailureReason LastFailureReason =>
+    diagnostics.LastFailureReason;
+    public TaskInterruptionOrigin LastInterruptionOrigin =>
+        diagnostics.LastInterruptionOrigin;
+    public string LastFailureDetails =>
+        diagnostics.LastFailureDetails;
+    public float LastFailureTime =>
+        diagnostics.LastFailureTime;
+    public Vector2Int? DiagnosticDestination =>
+        diagnostics.Destination;
+    public int DiagnosticPathLength =>
+        diagnostics.PathLength;
+    public int DiagnosticPathIndex =>
+        diagnostics.PathIndex;
+    public int DiagnosticReplanCount =>
+        diagnostics.ReplanCount;
+    public int DiagnosticMaxReplans =>
+        diagnostics.MaxReplans;
     public int LastMealConsumedPortions { get; private set; }
     public string LastMealDetails { get; private set; } = "Nenhuma refeição executada.";
 
     public Task ActiveTask => activeTask;
     public bool HasStorageReservation =>
-        reservedStorage != null && reservedStorageAmount > 0;
-    public Vector2Int ReservedStoragePosition => reservedStoragePosition;
-    public ResourceType ReservedStorageType => reservedStorageType;
-    public int ReservedStorageAmount => reservedStorageAmount;
-    public bool HasResourceReservation => reservedResourceAmount > 0;
-    public ResourceType ReservedResourceType => reservedResourceType;
-    public int ReservedResourceAmount => reservedResourceAmount;
+        storageReservation.IsActive;
+
+    public Vector2Int ReservedStoragePosition =>
+        storageReservation.StoragePosition;
+
+    public ResourceType ReservedStorageType =>
+        storageReservation.ResourceType;
+
+    public int ReservedStorageAmount =>
+        storageReservation.ReservedAmount;
+    public bool HasResourceReservation =>
+        blueprintDeliveryPlan.ReservedResourceAmount > 0;
+
+    public ResourceType ReservedResourceType =>
+        blueprintDeliveryPlan.ResourceType;
+
+    public int ReservedResourceAmount =>
+        blueprintDeliveryPlan.ReservedResourceAmount;
+
     public bool HasBlueprintReservation =>
-        reservedBlueprint != null && reservedDeliveryAmount > 0;
-    public int ReservedDeliveryAmount => reservedDeliveryAmount;
+        blueprintDeliveryPlan.ReservedDeliveryAmount > 0;
+
+    public int ReservedDeliveryAmount =>
+        blueprintDeliveryPlan.ReservedDeliveryAmount;
+
+    public int ReservedBlueprintCount =>
+        blueprintDeliveryPlan.Count;
 
     public bool CanContinueGroundHaul(Task task)
     {
         if (task == null
             || activeTask != task
-            || !groundItemCollected
+            || !groundHaulState.HasCollectedItem
             || inventory == null
             || !inventory.HasItem
             || !inventory.CarriedType.HasValue
             || !HasStorageReservation
-            || inventory.CarriedType.Value != reservedStorageType)
+            || inventory.CarriedType.Value
+    != storageReservation.ResourceType)
         {
             return false;
         }
 
-        StorageStructure storage = reservedStorage as StorageStructure;
-        return storage != null
-            && !storage.IsBeingDismantled
-            && storage.GetReservedSpace(reservedStorageType)
-                >= reservedStorageAmount;
+        return storageReservation.IsValidFor(inventory);
     }
 
     private void Awake()
@@ -87,6 +103,17 @@ public class DuplicantTaskRunner : MonoBehaviour
         controller = GetComponent<DuplicantController>();
         movement = GetComponent<DuplicantMovement>();
         inventory = GetComponent<DuplicantInventory>();
+
+        pathFollower = new DuplicantPathFollower(
+            controller,
+            movement,
+            diagnostics);
+
+        resourceCollector = new DuplicantResourceCollector(
+            controller,
+            inventory,
+            pathFollower);
+
     }
 
     private void OnDisable()
@@ -109,14 +136,11 @@ public class DuplicantTaskRunner : MonoBehaviour
     public IEnumerator ExecuteTaskRoutine(Task task, List<Vector2Int> path)
     {
         ReleaseDeliveryReservation();
-        ReleaseResourceReservation();
         ReleaseStorageReservation();
         ReleaseAdditionalHaulTask();
         activeTask = task;
-        activeGroundItem = null;
-        groundItemCollected = false;
-        failureRecordedForActiveTask = false;
-        ResetPathDiagnostics();
+        groundHaulState.Clear(null);
+        diagnostics.BeginTask();
 
         if (task == null)
         {
@@ -168,22 +192,29 @@ public class DuplicantTaskRunner : MonoBehaviour
             yield break;
         }
 
-        reservedStorage = storage;
-        reservedStorageType = type;
-        reservedStorageAmount = amount;
-        reservedStoragePosition = storage.GridPosition;
+        if (!storageReservation.Track(
+                storage,
+                type,
+                amount))
+        {
+            inventory.DropCarriedItem(GetSafeDropPosition());
+            controller.currentState =
+                DuplicantController.WorkerState.Idle;
+
+            yield break;
+        }
 
         List<Vector2Int> path =
             TaskNavigationUtility.GetPathToInteractionPosition(
                 controller.gridPosition,
-                reservedStoragePosition,
+                storageReservation.StoragePosition,
                 true,
                 controller.capabilityProfile);
 
         if (path != null)
         {
             yield return StartCoroutine(FollowPathToInteractionPosition(
-                reservedStoragePosition,
+                storageReservation.StoragePosition,
                 path));
         }
 
@@ -333,153 +364,244 @@ public class DuplicantTaskRunner : MonoBehaviour
 
     private IEnumerator ExecuteDeliveryTaskRoutine(Task task)
     {
-        ConstructionBlueprint bp = task.targetBlueprint;
-        if (bp == null || bp.CurrentState != BlueprintState.WaitingMaterials)
+        ConstructionBlueprint primaryBlueprint = task.targetBlueprint;
+        if (primaryBlueprint == null
+            || primaryBlueprint.CurrentState
+                != BlueprintState.WaitingMaterials)
         {
             CancelTask(task, TaskFailureReason.TargetInvalid,
                 "O blueprint não está aguardando materiais.");
             yield break;
         }
 
-        ResourceType reqResource = bp.requiredResource;
-        int remainingNeeded = bp.GetRemainingNeededAmount();
+        ResourceType requiredResource = primaryBlueprint.requiredResource;
 
-        if (remainingNeeded <= 0)
-        {
-            CancelTask(task, TaskFailureReason.ResourceUnavailable,
-                "O blueprint não precisa de mais materiais.");
-            yield break;
-        }
-
-        if (inventory.HasItem && inventory.CarriedType != reqResource)
+        if (inventory.HasItem
+            && inventory.CarriedType != requiredResource)
         {
             inventory.DropCarriedItem(GetSafeDropPosition());
         }
 
-        int availableAmount = StockpileManager.Instance != null
-            ? StockpileManager.Instance.GetAvailableAmount(reqResource)
-            : 0;
-
-        int amountToFetch = Mathf.Min(
-            inventory.maxCapacity,
-            remainingNeeded,
-            availableAmount
-        );
-        amountToFetch = bp.ReserveDelivery(amountToFetch);
-
-        if (amountToFetch <= 0)
-        {
-            CancelTask(task, TaskFailureReason.ResourceUnavailable,
-                "Não há material disponível para reservar.");
-            yield break;
-        }
-
-        if (StockpileManager.Instance == null
-            || !StockpileManager.Instance.ReserveResource(
-                reqResource,
-                amountToFetch
-            ))
-        {
-            bp.CancelDeliveryReservation(amountToFetch);
-            CancelTask(task, TaskFailureReason.ReservationFailed,
-                "A reserva global do material falhou.");
-            yield break;
-        }
-
-        reservedBlueprint = bp;
-        reservedDeliveryAmount = amountToFetch;
-        reservedResourceType = reqResource;
-        reservedResourceAmount = amountToFetch;
-
-        yield return StartCoroutine(FetchResourceRoutine(reqResource, amountToFetch));
-
-        if (bp == null)
-        {
-            AbortDeliveryTask(
+        if (!TryBuildBlueprintDeliveryPlan(
                 task,
-                TaskFailureReason.TargetDestroyed,
-                "O blueprint foi destruído antes da entrega."
-            );
+                primaryBlueprint,
+                requiredResource))
+        {
+            DeferBlueprintDeliveryTask(
+                task,
+                "Sem material livre; procurando outra tarefa.");
             yield break;
         }
+
+        int plannedAmount =
+    blueprintDeliveryPlan.ReservedDeliveryAmount;
+        yield return StartCoroutine(
+            FetchResourceRoutine(requiredResource, plannedAmount));
 
         if (!inventory.HasItem)
         {
-            ReleaseDeliveryReservation();
-            CancelTask(task, TaskFailureReason.ResourceUnavailable,
-                "Nenhum material pôde ser coletado.");
-            yield break;
-        }
-
-        int undeliverableReservedAmount =
-            reservedDeliveryAmount - inventory.CarriedAmount;
-
-        if (undeliverableReservedAmount > 0)
-        {
-            bp.CancelDeliveryReservation(undeliverableReservedAmount);
-            reservedDeliveryAmount -= undeliverableReservedAmount;
-            StockpileManager.Instance?.UnreserveResource(
-                reservedResourceType,
-                undeliverableReservedAmount
-            );
-            reservedResourceAmount -= undeliverableReservedAmount;
-        }
-
-        List<Vector2Int> pathToBP = TaskNavigationUtility.GetPathToTask(controller.gridPosition, task, controller.capabilityProfile);
-        yield return StartCoroutine(FollowTaskPath(task, pathToBP));
-
-        if (!pathFollowSucceeded)
-        {
-            ReleaseDeliveryReservation();
-            CancelTask(task, TaskFailureReason.PathBlocked,
-                "Não foi possível chegar ao blueprint.");
-            yield break;
-        }
-
-        if (bp == null)
-        {
-            AbortDeliveryTask(
+            CancelTask(
                 task,
-                TaskFailureReason.TargetDestroyed,
-                "O blueprint foi destruído durante a entrega."
-            );
+                TaskFailureReason.ResourceUnavailable,
+                "O material reservado não estava alcançável para coleta.");
             yield break;
         }
 
-        if (bp != null && inventory.CarriedType.HasValue)
+        TrimBlueprintDeliveryPlanToCollectedAmount(
+            inventory.CarriedAmount);
+
+        int deliveredTotal = 0;
+
+        for (int i = 0;
+             i < blueprintDeliveryPlan.Count && inventory.HasItem;
+             i++)
         {
-            int deliveredAmount = bp.DeliverResource(
-                inventory.CarriedType.Value,
-                inventory.CarriedAmount
-            );
+            BlueprintDeliveryStop stop =
+                blueprintDeliveryPlan.GetStop(i);
+
+            if (stop.ReservedAmount <= 0)
+            {
+                continue;
+            }
+
+            ConstructionBlueprint blueprint = stop.Blueprint;
+            if (blueprint == null
+                || blueprint.CurrentState
+                    != BlueprintState.WaitingMaterials)
+            {
+                ReleaseBlueprintDeliveryStop(stop);
+                continue;
+            }
+
+            List<Vector2Int> path =
+                TaskNavigationUtility.GetPathToTask(
+                    controller.gridPosition,
+                    stop.Task,
+                    controller.capabilityProfile);
+
+            if (path == null)
+            {
+                ReleaseBlueprintDeliveryStop(stop);
+                continue;
+            }
+
+            yield return StartCoroutine(
+                FollowTaskPath(stop.Task, path));
+
+            if (!pathFollowSucceeded || blueprint == null)
+            {
+                ReleaseBlueprintDeliveryStop(stop);
+                continue;
+            }
+
+            int requestedAmount = Mathf.Min(
+                stop.ReservedAmount,
+                inventory.CarriedAmount);
+
+            int deliveredAmount = blueprint.DeliverResource(
+                requiredResource,
+                requestedAmount);
 
             if (deliveredAmount <= 0)
             {
-                AbortDeliveryTask(
-                    task,
-                    TaskFailureReason.DeliveryRejected,
-                    "O blueprint recusou a entrega."
-                );
-                yield break;
+                ReleaseBlueprintDeliveryStop(stop);
+                continue;
             }
 
-            reservedResourceAmount = Mathf.Max(
-                0,
-                reservedResourceAmount - deliveredAmount
-            );
+            int confirmedAmount =
+                blueprintDeliveryPlan.ConfirmDelivery(
+                    stop,
+                    deliveredAmount);
 
             inventory.RemoveItem(
-                inventory.CarriedType.Value,
-                deliveredAmount
-            );
+                requiredResource,
+                confirmedAmount);
 
-            ClearDeliveryReservationTracking();
-            ClearResourceReservationTracking();
+            deliveredTotal += deliveredAmount;
+
+            if (stop.ReservedAmount > 0)
+            {
+                ReleaseBlueprintDeliveryStop(stop);
+            }
+
+            TaskManager.Instance?.RemoveTask(stop.Task);
+            blueprint.NotifyTaskEnded(stop.Task);
         }
 
-        TaskManager.Instance?.RemoveTask(task);
-        bp?.NotifyTaskEnded(task);
+        if (deliveredTotal <= 0)
+        {
+            RecordFailure(
+                TaskFailureReason.PathBlocked,
+                "Nenhum destino reservado pôde receber a carga.");
+        }
+
         FinishCurrentTask();
+    }
+
+    private bool TryBuildBlueprintDeliveryPlan(
+        Task primaryTask,
+        ConstructionBlueprint primaryBlueprint,
+        ResourceType resourceType)
+    {
+        if (StockpileManager.Instance == null
+            || TaskManager.Instance == null)
+        {
+            return false;
+        }
+
+        int capacityRemaining = inventory.SpaceRemaining;
+
+        if (capacityRemaining <= 0)
+        {
+            return false;
+        }
+
+        if (!TryAddBlueprintDeliveryStop(
+                primaryTask,
+                primaryBlueprint,
+                capacityRemaining,
+                resourceType))
+        {
+            return false;
+        }
+
+        capacityRemaining = inventory.SpaceRemaining
+            - blueprintDeliveryPlan.ReservedDeliveryAmount;
+
+        Vector2Int batchAnchor = primaryBlueprint.gridPosition;
+
+        int maximumStops =
+            TaskManager.Instance.MaximumBlueprintDeliveriesPerRun;
+
+        while (capacityRemaining > 0
+               && blueprintDeliveryPlan.Count < maximumStops
+               && StockpileManager.Instance.GetAvailableAmount(
+                   resourceType) > 0)
+        {
+            if (!TaskManager.Instance
+                    .TryAssignAdditionalBlueprintDeliveryTask(
+                        controller.gridPosition,
+                        batchAnchor,
+                        resourceType,
+                        controller.capabilityProfile,
+                        out Task additionalTask))
+            {
+                break;
+            }
+
+            if (!TryAddBlueprintDeliveryStop(
+                    additionalTask,
+                    additionalTask.targetBlueprint,
+                    capacityRemaining,
+                    resourceType))
+            {
+                TaskManager.Instance.ReleaseTask(additionalTask);
+                break;
+            }
+
+            capacityRemaining = inventory.SpaceRemaining
+                - blueprintDeliveryPlan.ReservedDeliveryAmount;
+        }
+
+        return blueprintDeliveryPlan.ReservedDeliveryAmount > 0;
+    }
+
+    private bool TryAddBlueprintDeliveryStop(
+        Task task,
+        ConstructionBlueprint blueprint,
+        int capacityRemaining,
+        ResourceType resourceType)
+    {
+        return blueprintDeliveryPlan.TryAddStop(
+            task,
+            blueprint,
+            capacityRemaining,
+            resourceType);
+    }
+
+    private void TrimBlueprintDeliveryPlanToCollectedAmount(
+        int collectedAmount)
+    {
+        blueprintDeliveryPlan.TrimToCollectedAmount(
+            collectedAmount);
+    }
+
+    private void ReleaseBlueprintDeliveryStop(
+        BlueprintDeliveryStop stop)
+    {
+        blueprintDeliveryPlan.ReleaseStop(stop);
+    }
+    private void DeferBlueprintDeliveryTask(
+        Task task,
+        string details)
+    {
+        ReleaseAllReservations();
+        TaskManager.Instance?.ReleaseTask(task);
+
+        diagnostics.RecordInformation(details);
+
+        FinishCurrentTask();
+        controller.Brain?.RequestImmediateTaskSearch();
     }
 
     private IEnumerator ExecuteAssemblyTaskRoutine(Task task, List<Vector2Int> path)
@@ -494,7 +616,6 @@ public class DuplicantTaskRunner : MonoBehaviour
 
         Vector2Int targetBuildPos = bp.gridPosition;
 
-        // 1. Caminha e recalcula se o mundo mudar durante o percurso.
         yield return StartCoroutine(FollowTaskPath(task, path));
 
         if (!pathFollowSucceeded)
@@ -510,7 +631,6 @@ public class DuplicantTaskRunner : MonoBehaviour
             yield break;
         }
 
-        // 2. Se o colono ainda assim estiver PISANDO no tile do bloco, força o passo de afastamento
         if (bp != null && controller.gridPosition == targetBuildPos && bp.targetTileType != TileType.Ladder)
         {
             Vector2Int safeNeighbor = GridSafetyUtility.FindNearestStandableTileBFS(controller.gridPosition);
@@ -528,7 +648,6 @@ public class DuplicantTaskRunner : MonoBehaviour
             }
         }
 
-        // 3. Execução da Construção a uma distância segura
         controller.currentState = DuplicantController.WorkerState.Working;
 
         bool isCompleted = false;
@@ -549,149 +668,16 @@ public class DuplicantTaskRunner : MonoBehaviour
         FinishCurrentTask();
     }
 
-    private IEnumerator FetchResourceRoutine(ResourceType type, int targetAmount)
+    private IEnumerator FetchResourceRoutine(
+        ResourceType type,
+        int targetAmount)
     {
-        if (targetAmount <= 0)
-        {
-            yield break;
-        }
+        yield return resourceCollector.Fetch(
+            type,
+            targetAmount);
 
-        if (inventory.HasItem && inventory.CarriedType != type)
-        {
-            yield break;
-        }
-
-        int remainingAmount = Mathf.Max(
-            0,
-            targetAmount - inventory.CarriedAmount
-        );
-
-        if (remainingAmount <= 0)
-        {
-            yield break;
-        }
-
-        if (StructureManager.Instance != null)
-        {
-            List<StorageStructure> storages =
-                StructureManager.Instance.GetStoragesWithResource(type);
-
-            foreach (StorageStructure storage in storages)
-            {
-                if (remainingAmount <= 0 || inventory.SpaceRemaining <= 0)
-                {
-                    break;
-                }
-
-                List<Vector2Int> storagePath =
-                    TaskNavigationUtility.GetPathToInteractionPosition(
-                        controller.gridPosition,
-                        storage.GridPosition
-                    );
-
-                if (storagePath == null)
-                {
-                    continue;
-                }
-
-                yield return StartCoroutine(
-                    FollowPathToInteractionPosition(
-                        storage.GridPosition,
-                        storagePath
-                    )
-                );
-
-                if (!pathFollowSucceeded || storage == null)
-                {
-                    continue;
-                }
-
-                int requestedFromStorage = Mathf.Min(
-                    remainingAmount,
-                    inventory.SpaceRemaining,
-                    storage.GetLocalAmount(type)
-                );
-
-                if (requestedFromStorage <= 0
-                    || !storage.WithdrawItem(type, requestedFromStorage))
-                {
-                    continue;
-                }
-
-                int acceptedAmount = inventory.AddItem(
-                    type,
-                    requestedFromStorage
-                );
-
-                int rejectedAmount = requestedFromStorage - acceptedAmount;
-                if (rejectedAmount > 0)
-                {
-                    storage.StoreItem(type, rejectedAmount);
-                }
-
-                remainingAmount -= acceptedAmount;
-            }
-        }
-
-        if (remainingAmount <= 0 || inventory.SpaceRemaining <= 0)
-        {
-            yield break;
-        }
-
-        ResourceItem.CopyActiveItemsTo(activeResourceItemBuffer);
-        foreach (ResourceItem item in activeResourceItemBuffer)
-        {
-            if (remainingAmount <= 0 || inventory.SpaceRemaining <= 0)
-            {
-                break;
-            }
-
-            if (item == null || !item.gameObject.activeInHierarchy || item.type != type || item.amount <= 0)
-                continue;
-
-            Vector2Int itemGridPos = GridManager.Instance.WorldToGridPosition(item.transform.position);
-            List<Vector2Int> path = PathfindingAStar.Instance?.FindPath(controller.gridPosition, itemGridPos);
-
-            if (path != null)
-            {
-                yield return StartCoroutine(FollowPathToPosition(itemGridPos, path));
-
-                if (!pathFollowSucceeded)
-                {
-                    continue;
-                }
-
-                if (item == null || !item.gameObject.activeInHierarchy)
-                {
-                    continue;
-                }
-
-                int requestedAmount = Mathf.Min(
-                    remainingAmount,
-                    inventory.SpaceRemaining
-                );
-
-                if (!item.TryTake(requestedAmount, out int takenAmount))
-                {
-                    continue;
-                }
-
-                int acceptedAmount = inventory.AddItem(type, takenAmount);
-                int rejectedAmount = takenAmount - acceptedAmount;
-
-                if (rejectedAmount > 0)
-                {
-                    item.ReturnAmount(rejectedAmount);
-                }
-
-                remainingAmount -= acceptedAmount;
-
-                if (item.amount <= 0)
-                {
-                    item.Recycle();
-                }
-            }
-        }
+        // Mantém a compatibilidade com o restante do runner.
+        pathFollowSucceeded = pathFollower.Succeeded;
     }
 
     private IEnumerator ExecuteGroundHaulRoutine(
@@ -699,7 +685,7 @@ public class DuplicantTaskRunner : MonoBehaviour
         List<Vector2Int> initialPath)
     {
         ResourceItem item = task.targetItem;
-        activeGroundItem = item;
+        groundHaulState.SetActiveItem(item);
 
         if (item == null
             || !item.gameObject.activeInHierarchy
@@ -711,14 +697,12 @@ public class DuplicantTaskRunner : MonoBehaviour
             yield break;
         }
 
-        if (!item.TryReserve(this))
+        if (!groundHaulState.TryReserveItem(item, this))
         {
             CancelTask(task, TaskFailureReason.ResourceUnavailable,
                 "Outro duplicant já está coletando este item.");
             yield break;
         }
-
-        reservedGroundItem = item;
 
         if (inventory.HasItem && inventory.CarriedType != item.type)
         {
@@ -746,10 +730,18 @@ public class DuplicantTaskRunner : MonoBehaviour
             yield break;
         }
 
-        reservedStorage = storage;
-        reservedStorageType = item.type;
-        reservedStorageAmount = amountToStore;
-        reservedStoragePosition = storage.GridPosition;
+        if (!storageReservation.Track(
+                storage,
+                item.type,
+                amountToStore))
+        {
+            CancelTask(
+                task,
+                TaskFailureReason.ReservationFailed,
+                "Não foi possível registrar a reserva do baú.");
+
+            yield break;
+        }
 
         Vector2Int itemPosition =
             GridManager.Instance.WorldToGridPosition(item.transform.position);
@@ -813,33 +805,17 @@ public class DuplicantTaskRunner : MonoBehaviour
             yield break;
         }
 
-        groundItemCollected = true;
+        groundHaulState.MarkItemCollected();
         task.MarkGroundHaulCarrying(this);
 
         int unusedReservation =
-            reservedStorageAmount - inventory.CarriedAmount;
+           storageReservation.ReservedAmount
+           - inventory.CarriedAmount;
 
         if (unusedReservation > 0)
         {
-            StorageStructure storageWithReservation =
-                reservedStorage as StorageStructure;
-
-            if (storageWithReservation == null)
-            {
-                FailGroundHaulAfterPickup(
-                    task,
-                    TaskFailureReason.StorageUnavailable,
-                    "O baú reservado deixou de existir."
-                );
-                yield break;
-            }
-
-            storageWithReservation.ReleaseReservedSpace(
-                reservedStorageType,
-                unusedReservation
-            );
-
-            reservedStorageAmount -= unusedReservation;
+            storageReservation.ReleaseAmount(
+                unusedReservation);
         }
 
         if (item.amount <= 0)
@@ -852,7 +828,7 @@ public class DuplicantTaskRunner : MonoBehaviour
         List<Vector2Int> pathToStorage =
             TaskNavigationUtility.GetPathToInteractionPosition(
                 controller.gridPosition,
-                reservedStoragePosition,
+                storageReservation.StoragePosition,
                 true,
                 controller.capabilityProfile
             );
@@ -869,7 +845,7 @@ public class DuplicantTaskRunner : MonoBehaviour
 
         yield return StartCoroutine(
             FollowPathToInteractionPosition(
-                reservedStoragePosition,
+                storageReservation.StoragePosition,
                 pathToStorage
             )
         );
@@ -891,7 +867,6 @@ public class DuplicantTaskRunner : MonoBehaviour
 
         ClearStorageReservationTracking();
         inventory.Clear();
-        groundItemCollected = false;
 
         TaskManager.Instance?.RemoveTask(task);
 
@@ -955,7 +930,7 @@ public class DuplicantTaskRunner : MonoBehaviour
             }
 
             ResourceItem item = additionalTask.targetItem;
-            reservedAdditionalHaulTask = additionalTask;
+            groundHaulState.TrackAdditionalTask(additionalTask);
 
             if (item == null
                 || !item.gameObject.activeInHierarchy
@@ -967,13 +942,11 @@ public class DuplicantTaskRunner : MonoBehaviour
                 continue;
             }
 
-            if (!item.TryReserve(this))
+            if (!groundHaulState.TryReserveItem(item, this))
             {
                 ReleaseAdditionalHaulTask();
                 yield break;
             }
-
-            reservedGroundItem = item;
 
             Vector2Int itemPosition = GridManager.Instance.WorldToGridPosition(
                 item.transform.position
@@ -1028,140 +1001,17 @@ public class DuplicantTaskRunner : MonoBehaviour
         }
     }
 
-    private IEnumerator FollowTaskPath(Task task, List<Vector2Int> initialPath)
+    private IEnumerator FollowTaskPath(
+        Task task,
+        List<Vector2Int> initialPath)
     {
         pathFollowSucceeded = false;
 
-        List<Vector2Int> currentPath = initialPath;
-        int pathIndex = 0;
-        int replanCount = 0;
-        const int maxReplans = 8;
-        BeginPathDiagnostics(task.gridPosition, currentPath, maxReplans);
+        yield return pathFollower.FollowTask(
+            task,
+            initialPath);
 
-        while (true)
-        {
-            UpdatePathDiagnostics(currentPath, pathIndex, replanCount);
-
-            if (TaskManager.Instance == null
-                || !TaskManager.Instance.ContainsTask(task))
-            {
-                RecordFailure(
-                    TaskFailureReason.Interrupted,
-                    "A tarefa foi cancelada durante o deslocamento.");
-                yield break;
-            }
-
-            if (task == null || currentPath == null)
-            {
-                RecordFailure(
-                    TaskFailureReason.TargetUnreachable,
-                    "Não existe caminho até a tarefa."
-                );
-                yield break;
-            }
-
-            if (movement.ShouldFall())
-            {
-                yield return movement.HandleFallingRoutine();
-                currentPath = RecalculateTaskPath(task);
-                pathIndex = 0;
-                replanCount++;
-
-                if (replanCount > maxReplans)
-                {
-                    RecordFailure(
-                        TaskFailureReason.ReplanLimitReached,
-                        "Limite de recálculos do caminho atingido."
-                    );
-                    yield break;
-                }
-
-                continue;
-            }
-
-            if (pathIndex >= currentPath.Count)
-            {
-                pathFollowSucceeded = true;
-                yield break;
-            }
-
-            Vector2Int nextTile = currentPath[pathIndex];
-
-            if (!CanTraverseTo(nextTile))
-            {
-                currentPath = RecalculateTaskPath(task);
-                pathIndex = 0;
-                replanCount++;
-
-                if (currentPath == null || replanCount > maxReplans)
-                {
-                    RecordFailure(
-                        currentPath == null
-                            ? TaskFailureReason.PathBlocked
-                            : TaskFailureReason.ReplanLimitReached,
-                        currentPath == null
-                            ? "O caminho até a tarefa foi bloqueado."
-                            : "Limite de recálculos do caminho atingido."
-                    );
-                    yield break;
-                }
-
-                continue;
-            }
-
-            controller.currentState = DuplicantController.WorkerState.Moving;
-
-            MovementType moveType = movement.DeduceMovementType(
-                controller.gridPosition,
-                nextTile
-            );
-
-            yield return movement.MoveToTile(
-                nextTile,
-                moveType,
-                movement.GetCurrentMoveSpeed(moveType)
-            );
-
-            if (!movement.LastMoveSucceeded)
-            {
-                movement.SnapToGrid(controller.gridPosition);
-
-                // Outro duplicant pode ter alterado o terreno no mesmo frame.
-                // Aguarda o grafo terminar a atualização antes de desistir.
-                currentPath = null;
-                for (int retry = 0; retry < 3 && currentPath == null; retry++)
-                {
-                    yield return null;
-
-                    if (movement.ShouldFall())
-                    {
-                        yield return movement.HandleFallingRoutine();
-                    }
-
-                    currentPath = RecalculateTaskPath(task);
-                }
-
-                pathIndex = 0;
-                replanCount++;
-
-                if (currentPath == null || replanCount > maxReplans)
-                {
-                    RecordFailure(
-                        currentPath == null
-                            ? TaskFailureReason.MovementFailed
-                            : TaskFailureReason.ReplanLimitReached,
-                        currentPath == null
-                            ? "O movimento falhou e não existe rota alternativa."
-                            : "Limite de recálculos do caminho atingido."
-                    );
-                    yield break;
-                }
-
-                continue;
-            }
-
-            pathIndex++;
-        }
+        pathFollowSucceeded = pathFollower.Succeeded;
     }
 
     private IEnumerator FollowPathToPosition(
@@ -1170,120 +1020,11 @@ public class DuplicantTaskRunner : MonoBehaviour
     {
         pathFollowSucceeded = false;
 
-        List<Vector2Int> currentPath = initialPath;
-        int pathIndex = 0;
-        int replanCount = 0;
-        const int maxReplans = 8;
-        BeginPathDiagnostics(targetPosition, currentPath, maxReplans);
+        yield return pathFollower.FollowPosition(
+            targetPosition,
+            initialPath);
 
-        while (true)
-        {
-            UpdatePathDiagnostics(currentPath, pathIndex, replanCount);
-
-            if (currentPath == null)
-            {
-                RecordFailure(
-                    TaskFailureReason.TargetUnreachable,
-                    "Não existe caminho até o alvo."
-                );
-                yield break;
-            }
-
-            if (movement.ShouldFall())
-            {
-                yield return movement.HandleFallingRoutine();
-                currentPath = PathfindingAStar.Instance?.FindPath(
-                    controller.gridPosition,
-                    targetPosition
-                );
-                pathIndex = 0;
-                replanCount++;
-
-                if (replanCount > maxReplans)
-                {
-                    RecordFailure(
-                        TaskFailureReason.ReplanLimitReached,
-                        "Limite de recálculos do caminho atingido."
-                    );
-                    yield break;
-                }
-
-                continue;
-            }
-
-            if (pathIndex >= currentPath.Count)
-            {
-                pathFollowSucceeded = true;
-                yield break;
-            }
-
-            Vector2Int nextTile = currentPath[pathIndex];
-
-            if (!CanTraverseTo(nextTile))
-            {
-                currentPath = PathfindingAStar.Instance?.FindPath(
-                    controller.gridPosition,
-                    targetPosition
-                );
-                pathIndex = 0;
-                replanCount++;
-
-                if (currentPath == null || replanCount > maxReplans)
-                {
-                    RecordFailure(
-                        currentPath == null
-                            ? TaskFailureReason.PathBlocked
-                            : TaskFailureReason.ReplanLimitReached,
-                        currentPath == null
-                            ? "O caminho até o alvo foi bloqueado."
-                            : "Limite de recálculos do caminho atingido."
-                    );
-                    yield break;
-                }
-
-                continue;
-            }
-
-            controller.currentState = DuplicantController.WorkerState.Moving;
-
-            MovementType moveType = movement.DeduceMovementType(
-                controller.gridPosition,
-                nextTile
-            );
-
-            yield return movement.MoveToTile(
-                nextTile,
-                moveType,
-                movement.GetCurrentMoveSpeed(moveType)
-            );
-
-            if (!movement.LastMoveSucceeded)
-            {
-                currentPath = PathfindingAStar.Instance?.FindPath(
-                    controller.gridPosition,
-                    targetPosition
-                );
-                pathIndex = 0;
-                replanCount++;
-
-                if (currentPath == null || replanCount > maxReplans)
-                {
-                    RecordFailure(
-                        currentPath == null
-                            ? TaskFailureReason.MovementFailed
-                            : TaskFailureReason.ReplanLimitReached,
-                        currentPath == null
-                            ? "O movimento falhou e não existe rota alternativa."
-                            : "Limite de recálculos do caminho atingido."
-                    );
-                    yield break;
-                }
-
-                continue;
-            }
-
-            pathIndex++;
-        }
+        pathFollowSucceeded = pathFollower.Succeeded;
     }
 
     private IEnumerator FollowPathToInteractionPosition(
@@ -1293,183 +1034,12 @@ public class DuplicantTaskRunner : MonoBehaviour
     {
         pathFollowSucceeded = false;
 
-        List<Vector2Int> currentPath = initialPath;
-        int pathIndex = 0;
-        int replanCount = 0;
-        const int maxReplans = 8;
-        BeginPathDiagnostics(targetPosition, currentPath, maxReplans);
-
-        while (true)
-        {
-            UpdatePathDiagnostics(currentPath, pathIndex, replanCount);
-
-            if (currentPath == null)
-            {
-                RecordFailure(
-                    TaskFailureReason.StorageUnreachable,
-                    "Não existe caminho até a posição de interação."
-                );
-                yield break;
-            }
-
-            if (movement.ShouldFall())
-            {
-                yield return movement.HandleFallingRoutine();
-
-                currentPath = RecalculateInteractionPath(
-                    targetPosition,
-                    fixedInteractionPosition);
-
-                pathIndex = 0;
-                replanCount++;
-
-                if (replanCount > maxReplans)
-                {
-                    RecordFailure(
-                        TaskFailureReason.ReplanLimitReached,
-                        "Limite de recálculos do caminho atingido."
-                    );
-                    yield break;
-                }
-
-                continue;
-            }
-
-            if (pathIndex >= currentPath.Count)
-            {
-                if (fixedInteractionPosition.HasValue
-                    && controller.gridPosition != fixedInteractionPosition.Value)
-                {
-                    currentPath = RecalculateInteractionPath(
-                        targetPosition,
-                        fixedInteractionPosition);
-                    pathIndex = 0;
-                    replanCount++;
-
-                    if (currentPath == null || replanCount > maxReplans)
-                    {
-                        RecordFailure(
-                            TaskFailureReason.StorageUnreachable,
-                            "A posição reservada de interação ficou inacessível.");
-                        yield break;
-                    }
-
-                    continue;
-                }
-
-                pathFollowSucceeded = true;
-                yield break;
-            }
-
-            Vector2Int nextTile = currentPath[pathIndex];
-
-            if (!CanTraverseTo(nextTile))
-            {
-                currentPath = RecalculateInteractionPath(
-                    targetPosition,
-                    fixedInteractionPosition);
-
-                pathIndex = 0;
-                replanCount++;
-
-                if (currentPath == null || replanCount > maxReplans)
-                {
-                    RecordFailure(
-                        currentPath == null
-                            ? TaskFailureReason.StorageUnreachable
-                            : TaskFailureReason.ReplanLimitReached,
-                        currentPath == null
-                            ? "O caminho até a interação foi bloqueado."
-                            : "Limite de recálculos do caminho atingido."
-                    );
-                    yield break;
-                }
-
-                continue;
-            }
-
-            controller.currentState = DuplicantController.WorkerState.Moving;
-
-            MovementType moveType = movement.DeduceMovementType(
-                controller.gridPosition,
-                nextTile
-            );
-
-            yield return movement.MoveToTile(
-                nextTile,
-                moveType,
-                movement.GetCurrentMoveSpeed(moveType)
-            );
-
-            if (!movement.LastMoveSucceeded)
-            {
-                currentPath = RecalculateInteractionPath(
-                    targetPosition,
-                    fixedInteractionPosition);
-
-                pathIndex = 0;
-                replanCount++;
-
-                if (currentPath == null || replanCount > maxReplans)
-                {
-                    RecordFailure(
-                        currentPath == null
-                            ? TaskFailureReason.MovementFailed
-                            : TaskFailureReason.ReplanLimitReached,
-                        currentPath == null
-                            ? "O movimento falhou e não existe rota alternativa."
-                            : "Limite de recálculos do caminho atingido."
-                    );
-                    yield break;
-                }
-
-                continue;
-            }
-
-            pathIndex++;
-        }
-    }
-
-    private List<Vector2Int> RecalculateInteractionPath(
-        Vector2Int targetPosition,
-        Vector2Int? fixedInteractionPosition)
-    {
-        if (fixedInteractionPosition.HasValue)
-        {
-            if (controller.gridPosition == fixedInteractionPosition.Value)
-            {
-                return emptyPathBuffer;
-            }
-
-            return PathfindingAStar.Instance?.FindPath(
-                controller.gridPosition,
-                fixedInteractionPosition.Value,
-                controller.capabilityProfile);
-        }
-
-        return TaskNavigationUtility.GetPathToInteractionPosition(
-            controller.gridPosition,
+        yield return pathFollower.FollowInteraction(
             targetPosition,
-            true,
-            controller.capabilityProfile);
-    }
+            initialPath,
+            fixedInteractionPosition);
 
-    private List<Vector2Int> RecalculateTaskPath(Task task)
-    {
-        return TaskNavigationUtility.GetPathToTask(
-            controller.gridPosition,
-            task,
-            controller.capabilityProfile
-        );
-    }
-
-    private bool CanTraverseTo(Vector2Int nextTile)
-    {
-        return NavGraphGenerator.Instance != null
-            && NavGraphGenerator.Instance.CanTraverse(
-                controller.gridPosition,
-                nextTile
-            );
+        pathFollowSucceeded = pathFollower.Succeeded;
     }
 
     public void CancelActiveTaskState(bool preserveCarriedInventory = false)
@@ -1489,16 +1059,15 @@ public class DuplicantTaskRunner : MonoBehaviour
         if (!preserveCarriedInventory
             && (activeTask != null || controller.currentTask != null))
         {
-            LastInterruptionOrigin = origin;
+            diagnostics.SetInterruptionOrigin(origin);
+
             RecordFailure(
                 TaskFailureReason.Interrupted,
                 BuildInterruptionDetails(origin)
             );
         }
 
-        // Interrompe também as rotinas filhas de movimento e execução.
         StopAllCoroutines();
-
         ReleaseAllReservations();
 
         if (!preserveCarriedInventory
@@ -1507,10 +1076,9 @@ public class DuplicantTaskRunner : MonoBehaviour
             inventory.DropCarriedItem(GetSafeDropPosition());
         }
 
-        if (groundItemCollected)
+        if (groundHaulState.HasCollectedItem)
         {
             TaskManager.Instance?.RemoveTask(activeTask);
-
             TryCreateRemainingGroundHaulTask();
         }
         else
@@ -1539,8 +1107,10 @@ public class DuplicantTaskRunner : MonoBehaviour
         string inventoryDescription = inventory != null && inventory.HasItem
             ? $"{inventory.CarriedAmount}x {inventory.CarriedType}"
             : "vazio";
-        string storageDescription = reservedStorage != null
-            ? $"{reservedStorageAmount}x {reservedStorageType} em {reservedStoragePosition}"
+        string storageDescription = storageReservation.IsActive
+            ? $"{storageReservation.ReservedAmount}x "
+                + $"{storageReservation.ResourceType} em "
+                + $"{storageReservation.StoragePosition}"
             : "nenhuma";
 
         return $"Origem={origin}; Tarefa={taskDescription}; "
@@ -1551,7 +1121,6 @@ public class DuplicantTaskRunner : MonoBehaviour
     private void ReleaseAllReservations()
     {
         ReleaseDeliveryReservation();
-        ReleaseResourceReservation();
         ReleaseStorageReservation();
         ReleaseGroundItemReservation();
         ReleaseAdditionalHaulTask();
@@ -1587,155 +1156,43 @@ public class DuplicantTaskRunner : MonoBehaviour
 
     private void ReleaseDeliveryReservation()
     {
-        if (reservedBlueprint != null && reservedDeliveryAmount > 0)
-        {
-            reservedBlueprint.CancelDeliveryReservation(
-                reservedDeliveryAmount
-            );
-        }
-
-        ClearDeliveryReservationTracking();
-    }
-
-    private void ClearDeliveryReservationTracking()
-    {
-        reservedBlueprint = null;
-        reservedDeliveryAmount = 0;
-    }
-
-    private void ReleaseResourceReservation()
-    {
-        if (reservedResourceAmount > 0)
-        {
-            StockpileManager.Instance?.UnreserveResource(
-                reservedResourceType,
-                reservedResourceAmount
-            );
-        }
-
-        ClearResourceReservationTracking();
-    }
-
-    private void ClearResourceReservationTracking()
-    {
-        reservedResourceAmount = 0;
+        blueprintDeliveryPlan.ReleaseAll();
     }
 
     private void ReleaseStorageReservation()
     {
-        StorageStructure storage = reservedStorage as StorageStructure;
-
-        if (storage != null && reservedStorageAmount > 0)
-        {
-            storage.ReleaseReservedSpace(
-                reservedStorageType,
-                reservedStorageAmount
-            );
-        }
-
-        ClearStorageReservationTracking();
+        storageReservation.Release();
     }
 
     private void ReleaseGroundItemReservation()
     {
-        if (reservedGroundItem != null)
-        {
-            reservedGroundItem.ReleaseReservation(this);
-        }
-
-        reservedGroundItem = null;
+        groundHaulState.ReleaseItemReservation(this);
     }
 
-    private void ReleaseAdditionalHaulTask(bool removeTask = false)
+    private void ReleaseAdditionalHaulTask(
+        bool removeTask = false)
     {
-        if (reservedAdditionalHaulTask == null)
-        {
-            return;
-        }
-
-        if (removeTask)
-        {
-            TaskManager.Instance?.RemoveTask(reservedAdditionalHaulTask);
-        }
-        else
-        {
-            TaskManager.Instance?.ReleaseTask(reservedAdditionalHaulTask);
-        }
-
-        reservedAdditionalHaulTask = null;
+        groundHaulState.ReleaseAdditionalTask(removeTask);
     }
 
     private void ClearStorageReservationTracking()
     {
-        reservedStorage = null;
-        reservedStorageAmount = 0;
-        reservedStoragePosition = Vector2Int.zero;
+        storageReservation.Complete();
     }
 
     private bool TryStoreReservedInventory()
     {
-        StorageStructure storage = reservedStorage as StorageStructure;
-
-        if (storage == null
-            || !inventory.HasItem
-            || inventory.CarriedType != reservedStorageType)
-        {
-            return false;
-        }
-
-        int amountToStore = inventory.CarriedAmount;
-        int removedAmount = inventory.RemoveItem(
-            reservedStorageType,
-            amountToStore
-        );
-
-        if (removedAmount != amountToStore)
-        {
-            if (removedAmount > 0)
-            {
-                inventory.AddItem(reservedStorageType, removedAmount);
-            }
-
-            return false;
-        }
-
-        if (storage.StoreReservedItem(
-                reservedStorageType,
-                amountToStore))
-        {
-            return true;
-        }
-
-        // Se o baú recusou a entrega, devolve a carga ao inventário.
-        inventory.AddItem(reservedStorageType, amountToStore);
-        return false;
+        return storageReservation.TryStore(inventory);
     }
 
     private bool TryExpandStorageReservation(int amount)
     {
-        StorageStructure storage = reservedStorage as StorageStructure;
-
-        if (storage == null || amount <= 0
-            || !storage.TryReserveSpace(reservedStorageType, amount))
-        {
-            return false;
-        }
-
-        reservedStorageAmount += amount;
-        return true;
+        return storageReservation.TryExpand(amount);
     }
 
     private void ReleaseStorageReservationAmount(int amount)
     {
-        StorageStructure storage = reservedStorage as StorageStructure;
-
-        if (storage == null || amount <= 0)
-        {
-            return;
-        }
-
-        storage.ReleaseReservedSpace(reservedStorageType, amount);
-        reservedStorageAmount = Mathf.Max(0, reservedStorageAmount - amount);
+        storageReservation.ReleaseAmount(amount);
     }
 
     private void FailGroundHaulAfterPickup(
@@ -1754,7 +1211,6 @@ public class DuplicantTaskRunner : MonoBehaviour
         }
 
         TryCreateRemainingGroundHaulTask();
-        groundItemCollected = false;
         FinishCurrentTask();
     }
 
@@ -1798,20 +1254,20 @@ public class DuplicantTaskRunner : MonoBehaviour
 
     private void TryCreateRemainingGroundHaulTask()
     {
-        if (activeGroundItem != null
-            && activeGroundItem.gameObject.activeInHierarchy
-            && activeGroundItem.amount > 0)
+        ResourceItem item = groundHaulState.ActiveItem;
+
+        if (item != null
+            && item.gameObject.activeInHierarchy
+            && item.amount > 0)
         {
-            TaskManager.Instance?.AddHaulTask(activeGroundItem);
+            TaskManager.Instance?.AddHaulTask(item);
         }
     }
 
     private void ClearGroundHaulTracking()
     {
-        activeTask?.ResetGroundHaulProgress();
+        groundHaulState.Clear(activeTask);
         activeTask = null;
-        activeGroundItem = null;
-        groundItemCollected = false;
     }
 
     private void CancelTask(
@@ -1819,7 +1275,7 @@ public class DuplicantTaskRunner : MonoBehaviour
         TaskFailureReason reason = TaskFailureReason.Interrupted,
         string details = "A tarefa foi interrompida.")
     {
-        if (!failureRecordedForActiveTask)
+        if (!diagnostics.HasFailureForActiveTask)
         {
             RecordFailure(reason, details);
         }
@@ -1831,23 +1287,13 @@ public class DuplicantTaskRunner : MonoBehaviour
 
     public void ClearFailureDiagnostics()
     {
-        LastFailureReason = TaskFailureReason.None;
-        LastInterruptionOrigin = TaskInterruptionOrigin.None;
-        LastFailureDetails = "Nenhuma";
-        LastFailureTime = -1f;
-        failureRecordedForActiveTask = false;
+        diagnostics.ClearFailure();
     }
-
     private void RecordFailure(
         TaskFailureReason reason,
         string details)
     {
-        LastFailureReason = reason;
-        LastFailureDetails = string.IsNullOrWhiteSpace(details)
-            ? reason.ToString()
-            : details;
-        LastFailureTime = Time.time;
-        failureRecordedForActiveTask = true;
+        diagnostics.RecordFailure(reason, details);
     }
 
     private void BeginPathDiagnostics(
@@ -1855,11 +1301,11 @@ public class DuplicantTaskRunner : MonoBehaviour
         List<Vector2Int> path,
         int maxReplans)
     {
-        DiagnosticDestination = destination;
-        DiagnosticPathLength = path != null ? path.Count : 0;
-        DiagnosticPathIndex = 0;
-        DiagnosticReplanCount = 0;
-        DiagnosticMaxReplans = maxReplans;
+        diagnostics.BeginPath(
+            destination,
+            path,
+            maxReplans
+        );
     }
 
     private void UpdatePathDiagnostics(
@@ -1867,23 +1313,20 @@ public class DuplicantTaskRunner : MonoBehaviour
         int pathIndex,
         int replanCount)
     {
-        DiagnosticPathLength = path != null ? path.Count : 0;
-        DiagnosticPathIndex = pathIndex;
-        DiagnosticReplanCount = replanCount;
+        diagnostics.UpdatePath(
+            path,
+            pathIndex,
+            replanCount
+        );
     }
 
     private void ResetPathDiagnostics()
     {
-        DiagnosticDestination = null;
-        DiagnosticPathLength = 0;
-        DiagnosticPathIndex = 0;
-        DiagnosticReplanCount = 0;
-        DiagnosticMaxReplans = 0;
+        diagnostics.ResetPath();
     }
 
     private void FinishCurrentTask()
     {
-        // Última barreira contra reservas órfãs em qualquer caminho de saída.
         ReleaseAllReservations();
         ClearGroundHaulTracking();
         controller.currentTask = null;

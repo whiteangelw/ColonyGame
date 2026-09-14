@@ -28,14 +28,68 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
     [Header("Carregamento incremental")]
     [SerializeField, Min(1)] private int fullRebuildColumnsPerFrame = 8;
 
+    [Header("P5E - Atualização regional")]
+    [Tooltip("Quantidade máxima de regiões atualizadas por frame.")]
+    [SerializeField, Min(1)] private int maximumDirtyRegionsPerFrame = 2;
+
     private GridManager gridManager;
     private NavNode[,] nodeGrid;
+    private readonly Dictionary<int, PendingNavigationRegion>
+        pendingNavigationRegions =
+            new Dictionary<int, PendingNavigationRegion>(64);
+    private readonly Queue<int> pendingNavigationOrder = new Queue<int>(64);
+    private readonly Stack<PendingNavigationRegion> pendingRegionPool =
+        new Stack<PendingNavigationRegion>(64);
 
     private int width;
     private int height;
 
     public bool IsGraphReady { get; private set; }
     public DuplicantCapabilityProfile DefaultProfile => defaultProfile;
+    public int PendingNavigationRegionCount => pendingNavigationRegions.Count;
+    public bool HasPendingNavigationUpdates =>
+        pendingNavigationRegions.Count > 0;
+
+    private sealed class PendingNavigationRegion
+    {
+        public int MinimumX { get; private set; }
+        public int MaximumX { get; private set; }
+        public int MinimumY { get; private set; }
+        public int MaximumY { get; private set; }
+
+        public PendingNavigationRegion(
+            int minimumX,
+            int maximumX,
+            int minimumY,
+            int maximumY)
+        {
+            Reset(minimumX, maximumX, minimumY, maximumY);
+        }
+
+        public void Reset(
+            int minimumX,
+            int maximumX,
+            int minimumY,
+            int maximumY)
+        {
+            MinimumX = minimumX;
+            MaximumX = maximumX;
+            MinimumY = minimumY;
+            MaximumY = maximumY;
+        }
+
+        public void Include(
+            int minimumX,
+            int maximumX,
+            int minimumY,
+            int maximumY)
+        {
+            MinimumX = Mathf.Min(MinimumX, minimumX);
+            MaximumX = Mathf.Max(MaximumX, maximumX);
+            MinimumY = Mathf.Min(MinimumY, minimumY);
+            MaximumY = Mathf.Max(MaximumY, maximumY);
+        }
+    }
 
     private void Start()
     {
@@ -63,11 +117,20 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
     {
         if (gridManager == null)
         {
+            ClearPendingNavigationUpdates();
             return;
         }
 
         gridManager.OnGridRebuilt -= HandleGridRebuilt;
         gridManager.OnTileChanged -= OnTileChangedHandler;
+        ClearPendingNavigationUpdates();
+    }
+
+    private void LateUpdate()
+    {
+        ProcessPendingNavigationUpdates(
+            Mathf.Max(1, maximumDirtyRegionsPerFrame),
+            false);
     }
 
     private void HandleGridRebuilt()
@@ -93,6 +156,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
         }
 
         IsGraphReady = false;
+        ClearPendingNavigationUpdates();
         width = gridManager.width;
         height = gridManager.height;
         nodeGrid = new NavNode[width, height];
@@ -111,7 +175,11 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                     }
                 }
             }
-            if (endX < width) yield return null;
+
+            if (endX < width)
+            {
+                yield return null;
+            }
         }
 
         for (int startX = 0; startX < width; startX += columnsPerFrame)
@@ -130,7 +198,11 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                     }
                 }
             }
-            if (endX < width) yield return null;
+
+            if (endX < width)
+            {
+                yield return null;
+            }
         }
 
         PerformanceMetricsService.RecordNavRegeneration(true, width * height);
@@ -147,7 +219,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
             return;
         }
 
-        UpdateDirtyRegion(x, y);
+        QueueDirtyRegion(x, y);
     }
 
     public NavNode GetNode(int x, int y)
@@ -170,6 +242,8 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
         Vector2Int to,
         DuplicantCapabilityProfile profile = null)
     {
+        FlushPendingNavigationUpdates();
+
         if (!IsGraphReady)
         {
             return false;
@@ -218,6 +292,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
             return;
         }
 
+        ClearPendingNavigationUpdates();
         width = gridManager.width;
         height = gridManager.height;
 
@@ -230,7 +305,9 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
         }
 
         PerformanceMetricsService.RecordNavRegeneration(true, width * height);
-        PerformanceMetricsService.EndSample(PerformanceMetric.NavGraphFull, startedAt);
+        PerformanceMetricsService.EndSample(
+            PerformanceMetric.NavGraphFull,
+            startedAt);
 
         IsGraphReady = true;
     }
@@ -267,50 +344,194 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
             return;
         }
 
+        CalculateDirtyBounds(
+            centerX,
+            centerY,
+            out int minX,
+            out int maxX,
+            out int minY,
+            out int maxY);
+
+        RebuildNavigationBounds(minX, maxX, minY, maxY);
+    }
+
+    public void FlushPendingNavigationUpdates()
+    {
+        ProcessPendingNavigationUpdates(int.MaxValue, true);
+    }
+
+    private void QueueDirtyRegion(int centerX, int centerY)
+    {
+        if (nodeGrid == null || gridManager == null)
+        {
+            return;
+        }
+
+        if (!gridManager.Regions.TryGetByCell(
+                centerX,
+                centerY,
+                out WorldRegionState region))
+        {
+            UpdateDirtyRegion(centerX, centerY);
+            return;
+        }
+
+        CalculateDirtyBounds(
+            centerX,
+            centerY,
+            out int minX,
+            out int maxX,
+            out int minY,
+            out int maxY);
+
+        int regionKey = region.Coordinate.X
+            + region.Coordinate.Y * gridManager.RegionColumns;
+
+        if (pendingNavigationRegions.TryGetValue(
+                regionKey,
+                out PendingNavigationRegion pendingRegion))
+        {
+            pendingRegion.Include(minX, maxX, minY, maxY);
+        }
+        else
+        {
+            pendingNavigationRegions.Add(
+                regionKey,
+                RentPendingRegion(minX, maxX, minY, maxY));
+            pendingNavigationOrder.Enqueue(regionKey);
+        }
+
+        PerformanceMetricsService.RecordNavRegionalQueue(
+            pendingNavigationRegions.Count,
+            false);
+    }
+
+    private void ProcessPendingNavigationUpdates(
+        int maximumRegions,
+        bool forcedFlush)
+    {
+        if (!IsGraphReady
+            || nodeGrid == null
+            || pendingNavigationOrder.Count == 0)
+        {
+            return;
+        }
+
+        int processedRegions = 0;
+
+        while (processedRegions < maximumRegions
+               && pendingNavigationOrder.Count > 0)
+        {
+            int regionKey = pendingNavigationOrder.Dequeue();
+
+            if (!pendingNavigationRegions.TryGetValue(
+                    regionKey,
+                    out PendingNavigationRegion pendingRegion))
+            {
+                continue;
+            }
+
+            pendingNavigationRegions.Remove(regionKey);
+
+            RebuildNavigationBounds(
+                pendingRegion.MinimumX,
+                pendingRegion.MaximumX,
+                pendingRegion.MinimumY,
+                pendingRegion.MaximumY);
+
+            ReturnPendingRegion(pendingRegion);
+            processedRegions++;
+        }
+
+        PerformanceMetricsService.RecordNavRegionalQueue(
+            pendingNavigationRegions.Count,
+            forcedFlush && processedRegions > 0);
+    }
+
+    private void CalculateDirtyBounds(
+        int centerX,
+        int centerY,
+        out int minX,
+        out int maxX,
+        out int minY,
+        out int maxY)
+    {
         int effectiveRadiusX = Mathf.Max(
             dirtyRadiusX,
-            MaximumSupportedJumpGap + 1
-        );
+            MaximumSupportedJumpGap + 1);
 
         int effectiveRadiusY = Mathf.Max(
             dirtyRadiusY,
-            MaximumSupportedDropHeight + 1
-        );
+            MaximumSupportedDropHeight + 1);
 
-        int minX = Mathf.Clamp(
-            centerX - effectiveRadiusX,
-            0,
-            width - 1
-        );
+        minX = Mathf.Clamp(centerX - effectiveRadiusX, 0, width - 1);
+        maxX = Mathf.Clamp(centerX + effectiveRadiusX, 0, width - 1);
+        minY = Mathf.Clamp(centerY - effectiveRadiusY, 0, height - 1);
+        maxY = Mathf.Clamp(centerY + effectiveRadiusY, 0, height - 1);
+    }
 
-        int maxX = Mathf.Clamp(
-            centerX + effectiveRadiusX,
-            0,
-            width - 1
-        );
-
-        int minY = Mathf.Clamp(
-            centerY - effectiveRadiusY,
-            0,
-            height - 1
-        );
-
-        int maxY = Mathf.Clamp(
-            centerY + effectiveRadiusY,
-            0,
-            height - 1
-        );
-
+    private void RebuildNavigationBounds(
+        int minX,
+        int maxX,
+        int minY,
+        int maxY)
+    {
         long startedAt = PerformanceMetricsService.BeginSample();
+
         using (PartialRebuildMarker.Auto())
         {
             ClearDirtyRegion(minX, maxX, minY, maxY);
             RebuildDirtyRegion(minX, maxX, minY, maxY);
         }
 
-        int regeneratedCells = (maxX - minX + 1) * (maxY - minY + 1);
-        PerformanceMetricsService.RecordNavRegeneration(false, regeneratedCells);
-        PerformanceMetricsService.EndSample(PerformanceMetric.NavGraphPartial, startedAt);
+        int regeneratedCells =
+            (maxX - minX + 1) * (maxY - minY + 1);
+
+        PerformanceMetricsService.RecordNavRegeneration(
+            false,
+            regeneratedCells);
+
+        PerformanceMetricsService.EndSample(
+            PerformanceMetric.NavGraphPartial,
+            startedAt);
+    }
+
+    private void ClearPendingNavigationUpdates()
+    {
+        foreach (PendingNavigationRegion pendingRegion
+                 in pendingNavigationRegions.Values)
+        {
+            ReturnPendingRegion(pendingRegion);
+        }
+
+        pendingNavigationRegions.Clear();
+        pendingNavigationOrder.Clear();
+    }
+
+    private PendingNavigationRegion RentPendingRegion(
+        int minX,
+        int maxX,
+        int minY,
+        int maxY)
+    {
+        if (pendingRegionPool.Count == 0)
+        {
+            return new PendingNavigationRegion(
+                minX,
+                maxX,
+                minY,
+                maxY);
+        }
+
+        PendingNavigationRegion pendingRegion = pendingRegionPool.Pop();
+        pendingRegion.Reset(minX, maxX, minY, maxY);
+
+        return pendingRegion;
+    }
+
+    private void ReturnPendingRegion(PendingNavigationRegion pendingRegion)
+    {
+        pendingRegionPool.Push(pendingRegion);
     }
 
     private void ClearDirtyRegion(
@@ -378,7 +599,10 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
         Vector2Int from,
         NavEdge edge)
     {
-        if (edge.targetNode == null) return false;
+        if (edge.targetNode == null)
+        {
+            return false;
+        }
 
         DuplicantCapabilityProfile effectiveProfile =
             profile != null ? profile : defaultProfile;
@@ -387,8 +611,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
             && effectiveProfile.CanUseMovement(
                 edge.moveType,
                 from,
-                edge.targetNode.gridPosition
-            );
+                edge.targetNode.gridPosition);
     }
 
     private void CalculateNodeEdges(int x, int y)
@@ -446,14 +669,12 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
 
         float cost = defaultProfile.GetMovementCost(
             MovementType.ClimbLadder,
-            1f
-        );
+            1f);
 
         originNode.AddConnection(
             targetNode,
             MovementType.ClimbLadder,
-            cost
-        );
+            cost);
     }
 
     private void AddHorizontalConnections(
@@ -472,7 +693,6 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                 continue;
             }
 
-            // 1. Movimento horizontal normal.
             if (IsNavigablePosition(targetX, y))
             {
                 AddConnection(
@@ -480,35 +700,14 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                     targetX,
                     y,
                     MovementType.Walk,
-                    1f
-                );
+                    1f);
 
                 continue;
             }
 
-            // 2. Subida.
-            TryAddStepUp(
-                originNode,
-                x,
-                y,
-                targetX
-            );
-
-            // 3. Descida.
-            TryAddStepDown(
-                originNode,
-                x,
-                y,
-                targetX
-            );
-
-            // 4. Gap.
-            TryAddJumpGap(
-                originNode,
-                x,
-                y,
-                direction
-            );
+            TryAddStepUp(originNode, x, y, targetX);
+            TryAddStepDown(originNode, x, y, targetX);
+            TryAddJumpGap(originNode, x, y, direction);
         }
     }
 
@@ -529,7 +728,6 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                 break;
             }
 
-            // A coluna acima da origem precisa estar livre durante a subida.
             if (!gridManager.IsPassable(x, targetY))
             {
                 break;
@@ -537,8 +735,6 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
 
             if (!gridManager.IsPassable(targetX, targetY))
             {
-                // Esta camada ainda faz parte do obstáculo. Continua procurando
-                // o topo, mas nunca além do limite de 2 blocos.
                 continue;
             }
 
@@ -549,8 +745,6 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
 
             if (!IsStandablePosition(targetX, targetY))
             {
-                // IsStandablePosition só aprova um topo quando o suporte
-                // físico daquela ocupação declarou supportsWeight=true.
                 break;
             }
 
@@ -561,8 +755,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                 targetX,
                 targetY,
                 MovementType.StepUp,
-                distance
-            );
+                distance);
 
             break;
         }
@@ -574,11 +767,9 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
         int y,
         int targetX)
     {
-        for (
-            int drop = 1;
-            drop <= MaximumSupportedDropHeight;
-            drop++
-        )
+        for (int drop = 1;
+             drop <= MaximumSupportedDropHeight;
+             drop++)
         {
             int targetY = y - drop;
 
@@ -587,8 +778,6 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                 break;
             }
 
-            // O colono precisa conseguir atravessar
-            // horizontalmente até o ponto da queda.
             if (!gridManager.IsPassable(targetX, y))
             {
                 break;
@@ -599,9 +788,6 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                 break;
             }
 
-            // A trajetória vertical da queda não pode atravessar uma
-            // ocupação bloqueante. IsSolid não basta aqui: uma máquina pode
-            // bloquear movimento e, corretamente, não suportar peso.
             if (!gridManager.IsPassable(targetX, targetY))
             {
                 break;
@@ -616,14 +802,10 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                     targetX,
                     targetY,
                     MovementType.StepDown,
-                    distance
-                );
+                    distance);
 
                 break;
             }
-
-            // Encontrou chão sólido antes de encontrar
-            // uma posição válida. Não existe queda possível.
         }
     }
 
@@ -633,11 +815,9 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
         int y,
         int direction)
     {
-        for (
-            int gap = 2;
-            gap <= MaximumSupportedJumpGap + 1;
-            gap++
-        )
+        for (int gap = 2;
+             gap <= MaximumSupportedJumpGap + 1;
+             gap++)
         {
             int targetX = x + direction * gap;
 
@@ -658,8 +838,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
 
             float cost = defaultProfile.GetMovementCost(
                 MovementType.JumpGap,
-                gap
-            );
+                gap);
 
             NavNode targetNode = nodeGrid[targetX, y];
 
@@ -671,8 +850,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
             originNode.AddConnection(
                 targetNode,
                 MovementType.JumpGap,
-                cost
-            );
+                cost);
 
             break;
         }
@@ -723,14 +901,12 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
 
         float cost = defaultProfile.GetMovementCost(
             movementType,
-            distance
-        );
+            distance);
 
         originNode.AddConnection(
             targetNode,
             movementType,
-            cost
-        );
+            cost);
     }
 
     private bool IsInsideGrid(int x, int y)
@@ -769,14 +945,10 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                 Vector3 nodePosition = new Vector3(
                     x * cellSize + cellSize / 2f,
                     y * cellSize + cellSize / 2f,
-                    0f
-                );
+                    0f);
 
                 Gizmos.color = Color.cyan;
-                Gizmos.DrawSphere(
-                    nodePosition,
-                    0.15f
-                );
+                Gizmos.DrawSphere(nodePosition, 0.15f);
 
                 foreach (NavEdge edge in node.connections)
                 {
@@ -785,8 +957,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                             + cellSize / 2f,
                         edge.targetNode.gridPosition.y * cellSize
                             + cellSize / 2f,
-                        0f
-                    );
+                        0f);
 
                     switch (edge.moveType)
                     {
@@ -811,10 +982,7 @@ public class NavGraphGenerator : Singleton<NavGraphGenerator>
                             break;
                     }
 
-                    Gizmos.DrawLine(
-                        nodePosition,
-                        targetPosition
-                    );
+                    Gizmos.DrawLine(nodePosition, targetPosition);
                 }
             }
         }
