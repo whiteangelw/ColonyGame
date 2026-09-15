@@ -14,7 +14,7 @@ public class DuplicantTaskRunner : MonoBehaviour
     private DuplicantInventory inventory;
     private DuplicantPathFollower pathFollower;
     private DuplicantResourceCollector resourceCollector;
-
+    private DuplicantMealExecutor mealExecutor;
     private bool pathFollowSucceeded;
     private readonly DuplicantStorageReservation storageReservation =
         new DuplicantStorageReservation();
@@ -25,10 +25,12 @@ public class DuplicantTaskRunner : MonoBehaviour
      new DuplicantTaskDiagnostics();
     private bool applicationIsQuitting;
     private bool isFinalizingTask;
-    private IFoodSource reservedFoodSource;
-private readonly DuplicantBlueprintDeliveryPlan
-    blueprintDeliveryPlan =
-        new DuplicantBlueprintDeliveryPlan();
+    private readonly DuplicantBlueprintDeliveryPlan
+        blueprintDeliveryPlan =
+            new DuplicantBlueprintDeliveryPlan();
+    private DuplicantWorkExecutor workExecutor;
+    private DuplicantBlueprintDeliveryExecutor
+    blueprintDeliveryExecutor;
     public TaskFailureReason LastFailureReason =>
     diagnostics.LastFailureReason;
     public TaskInterruptionOrigin LastInterruptionOrigin =>
@@ -47,8 +49,15 @@ private readonly DuplicantBlueprintDeliveryPlan
         diagnostics.ReplanCount;
     public int DiagnosticMaxReplans =>
         diagnostics.MaxReplans;
-    public int LastMealConsumedPortions { get; private set; }
-    public string LastMealDetails { get; private set; } = "Nenhuma refeição executada.";
+    public int LastMealConsumedPortions =>
+        mealExecutor != null
+            ? mealExecutor.LastConsumedPortions
+            : 0;
+
+    public string LastMealDetails =>
+        mealExecutor != null
+            ? mealExecutor.LastDetails
+            : "Nenhuma refeição executada.";
 
     public Task ActiveTask => activeTask;
     public bool HasStorageReservation =>
@@ -109,9 +118,26 @@ private readonly DuplicantBlueprintDeliveryPlan
             movement,
             diagnostics);
 
+        workExecutor = new DuplicantWorkExecutor(
+            controller,
+            movement,
+            pathFollower);
+
         resourceCollector = new DuplicantResourceCollector(
             controller,
             inventory,
+            pathFollower);
+
+        blueprintDeliveryExecutor =
+        new DuplicantBlueprintDeliveryExecutor(
+            controller,
+            inventory,
+            pathFollower,
+            resourceCollector,
+            blueprintDeliveryPlan);
+
+        mealExecutor = new DuplicantMealExecutor(
+            controller,
             pathFollower);
 
     }
@@ -211,6 +237,7 @@ private readonly DuplicantBlueprintDeliveryPlan
                 true,
                 controller.capabilityProfile);
 
+        pathFollowSucceeded = false;
         if (path != null)
         {
             yield return StartCoroutine(FollowPathToInteractionPosition(
@@ -234,362 +261,78 @@ private readonly DuplicantBlueprintDeliveryPlan
 
     public IEnumerator ExecuteEatingRoutine(MealPlan mealPlan)
     {
-        LastMealConsumedPortions = 0;
-        LastMealDetails = "Plano de refeição inválido.";
-        reservedFoodSource = mealPlan != null ? mealPlan.Source : null;
+        yield return mealExecutor.Execute(mealPlan);
 
-        if (mealPlan == null
-            || !IsFoodSourceValid(reservedFoodSource)
-            || reservedFoodSource.GetReservedPortionCount(controller) <= 0)
-        {
-            ReleaseFoodReservation();
-            yield break;
-        }
-
-        yield return StartCoroutine(
-            FollowPathToInteractionPosition(
-                reservedFoodSource.GridPosition,
-                mealPlan.Path,
-                mealPlan.InteractionPosition)
-        );
-
-        if (!pathFollowSucceeded)
-        {
-            LastMealDetails = "A posição reservada do baú ficou inalcançável.";
-            ReleaseFoodReservation();
-            controller.currentState = DuplicantController.WorkerState.Idle;
-            yield break;
-        }
-
-        if (!IsFoodSourceValid(reservedFoodSource))
-        {
-            LastMealDetails = "A fonte de alimento foi destruída ou desativada.";
-            ReleaseFoodReservation();
-            controller.currentState = DuplicantController.WorkerState.Idle;
-            yield break;
-        }
-
-        if (reservedFoodSource.GetReservedPortionCount(controller) <= 0)
-        {
-            LastMealDetails = "A reserva alimentar foi liberada antes do consumo.";
-            ReleaseFoodReservation();
-            controller.currentState = DuplicantController.WorkerState.Idle;
-            yield break;
-        }
-
-        controller.currentState = DuplicantController.WorkerState.Eating;
-        LifeCycleSettingsSO settings = LifeCycleSystem.Instance != null
-            ? LifeCycleSystem.Instance.Settings
-            : null;
-
-        int consumedPortions = 0;
-        float totalRestored = 0f;
-        while (controller.Vitals != null
-            && controller.Vitals.CurrentHunger < mealPlan.HungerTarget
-            && IsFoodSourceValid(reservedFoodSource)
-            && reservedFoodSource.GetReservedPortionCount(controller) > 0)
-        {
-            yield return new WaitForSeconds(
-                settings != null
-                    ? settings.foodEatingDurationPerPortion
-                    : 1.2f);
-
-            IFoodSource food = reservedFoodSource;
-            if (!IsFoodSourceValid(food)
-                || !food.TryConsumeReservedPortion(
-                    controller,
-                    out float hungerRestored,
-                    out bool isRawFood))
-            {
-                LastMealDetails = IsFoodSourceValid(food)
-                    ? "A fonte recusou uma porção que ainda constava como reservada."
-                    : "A fonte foi invalidada durante o consumo.";
-                break;
-            }
-
-            controller.Vitals.RestoreHunger(hungerRestored);
-            ApplyRawFoodEffectIfNeeded(isRawFood, settings);
-            totalRestored += hungerRestored;
-            consumedPortions++;
-        }
-
-        ReleaseFoodReservation();
-        if (consumedPortions > 0)
-        {
-            LastMealConsumedPortions = consumedPortions;
-            LastMealDetails = $"Consumiu {consumedPortions} porção(ões).";
-            GameEvents.TriggerFloatingTextRequested(
-                $"Refeição: {consumedPortions}x (+{totalRestored:F0})",
-                transform.position,
-                Color.green);
-        }
-        else if (LastMealDetails == "Plano de refeição inválido.")
-        {
-            LastMealDetails = "Nenhuma porção reservada pôde ser consumida.";
-        }
-
-        controller.currentState = DuplicantController.WorkerState.Idle;
-    }
-
-    private static bool IsFoodSourceValid(IFoodSource source)
-    {
-        return source != null
-            && (!(source is Object unityObject) || unityObject != null);
-    }
-
-    private void ApplyRawFoodEffectIfNeeded(
-        bool isRawFood,
-        LifeCycleSettingsSO settings)
-    {
-        if (!isRawFood || settings == null || controller.StatusEffects == null
-            || Random.value > settings.rawFoodDiscomfortChance)
-        {
-            return;
-        }
-
-        controller.StatusEffects.ApplyRawFoodDiscomfort(
-            settings.rawFoodDiscomfortDuration,
-            settings.rawFoodWorkPenaltyPercent);
-
-        GameEvents.TriggerFloatingTextRequested(
-            "Desconforto por alimento cru",
-            transform.position,
-            Color.yellow);
+        // Mantém o estado usado pelo runner consistente.
+        pathFollowSucceeded = pathFollower.Succeeded;
     }
 
     public void CancelEmergencyFoodState()
     {
-        ReleaseFoodReservation();
+        mealExecutor?.Cancel();
     }
 
     private IEnumerator ExecuteDeliveryTaskRoutine(Task task)
     {
-        ConstructionBlueprint primaryBlueprint = task.targetBlueprint;
-        if (primaryBlueprint == null
-            || primaryBlueprint.CurrentState
-                != BlueprintState.WaitingMaterials)
-        {
-            CancelTask(task, TaskFailureReason.TargetInvalid,
-                "O blueprint não está aguardando materiais.");
-            yield break;
-        }
+        ConstructionBlueprint blueprint = task.targetBlueprint;
 
-        ResourceType requiredResource = primaryBlueprint.requiredResource;
-
-        if (inventory.HasItem
-            && inventory.CarriedType != requiredResource)
+        // Mantém o comportamento anterior: não mistura recursos
+        // de tipos diferentes no mesmo inventário.
+        if (blueprint != null
+            && inventory.HasItem
+            && inventory.CarriedType != blueprint.requiredResource)
         {
             inventory.DropCarriedItem(GetSafeDropPosition());
         }
 
-        if (!TryBuildBlueprintDeliveryPlan(
-                task,
-                primaryBlueprint,
-                requiredResource))
+        yield return blueprintDeliveryExecutor.Execute(task);
+
+        pathFollowSucceeded = pathFollower.Succeeded;
+
+        switch (blueprintDeliveryExecutor.Result)
         {
-            DeferBlueprintDeliveryTask(
-                task,
-                "Sem material livre; procurando outra tarefa.");
-            yield break;
+            case BlueprintDeliveryExecutionResult.Completed:
+                FinishCurrentTask();
+                yield break;
+
+            case BlueprintDeliveryExecutionResult.PrimaryBlueprintInvalid:
+                CancelTask(
+                    task,
+                    TaskFailureReason.TargetInvalid,
+                    "O blueprint não está aguardando materiais.");
+                yield break;
+
+            case BlueprintDeliveryExecutionResult.NoMaterialPlan:
+                DeferBlueprintDeliveryTask(
+                    task,
+                    "Sem material livre; procurando outra tarefa.");
+                yield break;
+
+            case BlueprintDeliveryExecutionResult.ResourceUnavailable:
+                CancelTask(
+                    task,
+                    TaskFailureReason.ResourceUnavailable,
+                    "O material reservado não estava alcançável "
+                        + "para coleta.");
+                yield break;
+
+            case BlueprintDeliveryExecutionResult
+                .NoDestinationReceivedLoad:
+
+                RecordFailure(
+                    TaskFailureReason.PathBlocked,
+                    "Nenhum destino reservado pôde receber a carga.");
+
+                FinishCurrentTask();
+                yield break;
+
+            default:
+                CancelTask(
+                    task,
+                    TaskFailureReason.TargetInvalid,
+                    "A entrega terminou em estado inválido.");
+                yield break;
         }
-
-        int plannedAmount =
-    blueprintDeliveryPlan.ReservedDeliveryAmount;
-        yield return StartCoroutine(
-            FetchResourceRoutine(requiredResource, plannedAmount));
-
-        if (!inventory.HasItem)
-        {
-            CancelTask(
-                task,
-                TaskFailureReason.ResourceUnavailable,
-                "O material reservado não estava alcançável para coleta.");
-            yield break;
-        }
-
-        TrimBlueprintDeliveryPlanToCollectedAmount(
-            inventory.CarriedAmount);
-
-        int deliveredTotal = 0;
-
-        for (int i = 0;
-             i < blueprintDeliveryPlan.Count && inventory.HasItem;
-             i++)
-        {
-            BlueprintDeliveryStop stop =
-                blueprintDeliveryPlan.GetStop(i);
-
-            if (stop.ReservedAmount <= 0)
-            {
-                continue;
-            }
-
-            ConstructionBlueprint blueprint = stop.Blueprint;
-            if (blueprint == null
-                || blueprint.CurrentState
-                    != BlueprintState.WaitingMaterials)
-            {
-                ReleaseBlueprintDeliveryStop(stop);
-                continue;
-            }
-
-            List<Vector2Int> path =
-                TaskNavigationUtility.GetPathToTask(
-                    controller.gridPosition,
-                    stop.Task,
-                    controller.capabilityProfile);
-
-            if (path == null)
-            {
-                ReleaseBlueprintDeliveryStop(stop);
-                continue;
-            }
-
-            yield return StartCoroutine(
-                FollowTaskPath(stop.Task, path));
-
-            if (!pathFollowSucceeded || blueprint == null)
-            {
-                ReleaseBlueprintDeliveryStop(stop);
-                continue;
-            }
-
-            int requestedAmount = Mathf.Min(
-                stop.ReservedAmount,
-                inventory.CarriedAmount);
-
-            int deliveredAmount = blueprint.DeliverResource(
-                requiredResource,
-                requestedAmount);
-
-            if (deliveredAmount <= 0)
-            {
-                ReleaseBlueprintDeliveryStop(stop);
-                continue;
-            }
-
-            int confirmedAmount =
-                blueprintDeliveryPlan.ConfirmDelivery(
-                    stop,
-                    deliveredAmount);
-
-            inventory.RemoveItem(
-                requiredResource,
-                confirmedAmount);
-
-            deliveredTotal += deliveredAmount;
-
-            if (stop.ReservedAmount > 0)
-            {
-                ReleaseBlueprintDeliveryStop(stop);
-            }
-
-            TaskManager.Instance?.RemoveTask(stop.Task);
-            blueprint.NotifyTaskEnded(stop.Task);
-        }
-
-        if (deliveredTotal <= 0)
-        {
-            RecordFailure(
-                TaskFailureReason.PathBlocked,
-                "Nenhum destino reservado pôde receber a carga.");
-        }
-
-        FinishCurrentTask();
-    }
-
-    private bool TryBuildBlueprintDeliveryPlan(
-        Task primaryTask,
-        ConstructionBlueprint primaryBlueprint,
-        ResourceType resourceType)
-    {
-        if (StockpileManager.Instance == null
-            || TaskManager.Instance == null)
-        {
-            return false;
-        }
-
-        int capacityRemaining = inventory.SpaceRemaining;
-
-        if (capacityRemaining <= 0)
-        {
-            return false;
-        }
-
-        if (!TryAddBlueprintDeliveryStop(
-                primaryTask,
-                primaryBlueprint,
-                capacityRemaining,
-                resourceType))
-        {
-            return false;
-        }
-
-        capacityRemaining = inventory.SpaceRemaining
-            - blueprintDeliveryPlan.ReservedDeliveryAmount;
-
-        Vector2Int batchAnchor = primaryBlueprint.gridPosition;
-
-        int maximumStops =
-            TaskManager.Instance.MaximumBlueprintDeliveriesPerRun;
-
-        while (capacityRemaining > 0
-               && blueprintDeliveryPlan.Count < maximumStops
-               && StockpileManager.Instance.GetAvailableAmount(
-                   resourceType) > 0)
-        {
-            if (!TaskManager.Instance
-                    .TryAssignAdditionalBlueprintDeliveryTask(
-                        controller.gridPosition,
-                        batchAnchor,
-                        resourceType,
-                        controller.capabilityProfile,
-                        out Task additionalTask))
-            {
-                break;
-            }
-
-            if (!TryAddBlueprintDeliveryStop(
-                    additionalTask,
-                    additionalTask.targetBlueprint,
-                    capacityRemaining,
-                    resourceType))
-            {
-                TaskManager.Instance.ReleaseTask(additionalTask);
-                break;
-            }
-
-            capacityRemaining = inventory.SpaceRemaining
-                - blueprintDeliveryPlan.ReservedDeliveryAmount;
-        }
-
-        return blueprintDeliveryPlan.ReservedDeliveryAmount > 0;
-    }
-
-    private bool TryAddBlueprintDeliveryStop(
-        Task task,
-        ConstructionBlueprint blueprint,
-        int capacityRemaining,
-        ResourceType resourceType)
-    {
-        return blueprintDeliveryPlan.TryAddStop(
-            task,
-            blueprint,
-            capacityRemaining,
-            resourceType);
-    }
-
-    private void TrimBlueprintDeliveryPlanToCollectedAmount(
-        int collectedAmount)
-    {
-        blueprintDeliveryPlan.TrimToCollectedAmount(
-            collectedAmount);
-    }
-
-    private void ReleaseBlueprintDeliveryStop(
-        BlueprintDeliveryStop stop)
-    {
-        blueprintDeliveryPlan.ReleaseStop(stop);
     }
     private void DeferBlueprintDeliveryTask(
         Task task,
@@ -604,68 +347,60 @@ private readonly DuplicantBlueprintDeliveryPlan
         controller.Brain?.RequestImmediateTaskSearch();
     }
 
-    private IEnumerator ExecuteAssemblyTaskRoutine(Task task, List<Vector2Int> path)
+    private IEnumerator ExecuteAssemblyTaskRoutine(
+        Task task,
+        List<Vector2Int> path)
     {
-        ConstructionBlueprint bp = task.targetBlueprint;
-        if (bp == null || bp.CurrentState != BlueprintState.ReadyToBuild)
+        yield return workExecutor.ExecuteAssembly(task, path);
+
+        pathFollowSucceeded = pathFollower.Succeeded;
+
+        switch (workExecutor.Result)
         {
-            CancelTask(task, TaskFailureReason.TargetInvalid,
-                "O blueprint não está pronto para montagem.");
-            yield break;
+            case TaskWorkExecutionResult.Completed:
+                FinishCurrentTask();
+                yield break;
+
+            case TaskWorkExecutionResult.TargetInvalid:
+                CancelTask(
+                    task,
+                    TaskFailureReason.TargetInvalid,
+                    "O blueprint não está pronto para montagem.");
+                yield break;
+
+            case TaskWorkExecutionResult.PathBlocked:
+                CancelTask(
+                    task,
+                    TaskFailureReason.PathBlocked,
+                    "Não foi possível chegar à construção.");
+                yield break;
+
+            case TaskWorkExecutionResult.TargetDestroyedBeforeWork:
+                RemoveDestroyedTargetTask(
+                    task,
+                    "O blueprint foi destruído antes da montagem.");
+                yield break;
+
+            case TaskWorkExecutionResult.TargetDestroyedDuringWork:
+                RemoveDestroyedTargetTask(
+                    task,
+                    "O blueprint foi destruído durante a montagem.");
+                yield break;
+
+            case TaskWorkExecutionResult.MovementFailed:
+                CancelTask(
+                    task,
+                    TaskFailureReason.MovementFailed,
+                    "O afastamento do tile da construção falhou.");
+                yield break;
+
+            default:
+                CancelTask(
+                    task,
+                    TaskFailureReason.TargetInvalid,
+                    "A execução da montagem terminou em estado inválido.");
+                yield break;
         }
-
-        Vector2Int targetBuildPos = bp.gridPosition;
-
-        yield return StartCoroutine(FollowTaskPath(task, path));
-
-        if (!pathFollowSucceeded)
-        {
-            CancelTask(task, TaskFailureReason.PathBlocked,
-                "Não foi possível chegar à construção.");
-            yield break;
-        }
-
-        if (bp == null)
-        {
-            RemoveDestroyedTargetTask(task, "O blueprint foi destruído antes da montagem.");
-            yield break;
-        }
-
-        if (bp != null && controller.gridPosition == targetBuildPos && bp.targetTileType != TileType.Ladder)
-        {
-            Vector2Int safeNeighbor = GridSafetyUtility.FindNearestStandableTileBFS(controller.gridPosition);
-            if (safeNeighbor != controller.gridPosition)
-            {
-                MovementType moveType = movement.DeduceMovementType(controller.gridPosition, safeNeighbor);
-                yield return movement.MoveToTile(safeNeighbor, moveType, movement.GetCurrentMoveSpeed(moveType));
-
-                if (!movement.LastMoveSucceeded)
-                {
-                    CancelTask(task, TaskFailureReason.MovementFailed,
-                        "O afastamento do tile da construção falhou.");
-                    yield break;
-                }
-            }
-        }
-
-        controller.currentState = DuplicantController.WorkerState.Working;
-
-        bool isCompleted = false;
-        while (!isCompleted && bp != null)
-        {
-            float workDelta = Time.deltaTime
-                * controller.WorkEfficiencyMultiplier;
-            isCompleted = bp.ApplyWork(workDelta);
-            yield return null;
-        }
-
-        if (bp == null && !isCompleted)
-        {
-            RemoveDestroyedTargetTask(task, "O blueprint foi destruído durante a montagem.");
-            yield break;
-        }
-
-        FinishCurrentTask();
     }
 
     private IEnumerator FetchResourceRoutine(
@@ -880,38 +615,45 @@ private readonly DuplicantBlueprintDeliveryPlan
         FinishCurrentTask();
     }
 
-    private IEnumerator ExecuteGenericTaskRoutine(Task task, List<Vector2Int> path)
+    private IEnumerator ExecuteGenericTaskRoutine(
+        Task task,
+        List<Vector2Int> path)
     {
-        yield return StartCoroutine(FollowTaskPath(task, path));
+        yield return workExecutor.ExecuteGeneric(task, path);
 
-        if (!pathFollowSucceeded)
+        pathFollowSucceeded = pathFollower.Succeeded;
+
+        switch (workExecutor.Result)
         {
-            CancelTask(task, TaskFailureReason.PathBlocked,
-                "Não foi possível chegar ao destino da tarefa.");
-            yield break;
+            case TaskWorkExecutionResult.Completed:
+                FinishCurrentTask();
+                yield break;
+
+            case TaskWorkExecutionResult.PathBlocked:
+                CancelTask(
+                    task,
+                    TaskFailureReason.PathBlocked,
+                    "Não foi possível chegar ao destino da tarefa.");
+                yield break;
+
+            case TaskWorkExecutionResult.TargetDestroyedBeforeWork:
+                RemoveDestroyedTargetTask(
+                    task,
+                    "O alvo deixou de ser válido antes do trabalho.");
+                yield break;
+
+            case TaskWorkExecutionResult.TargetDestroyedDuringWork:
+                RemoveDestroyedTargetTask(
+                    task,
+                    "O alvo mudou durante o trabalho.");
+                yield break;
+
+            default:
+                RemoveDestroyedTargetTask(
+                    task,
+                    "A execução da tarefa terminou em estado inválido.");
+                yield break;
         }
-
-        if (TaskManager.Instance == null
-            || !TaskManager.Instance.IsTaskValid(task))
-        {
-            RemoveDestroyedTargetTask(task, "O alvo deixou de ser válido antes do trabalho.");
-            yield break;
-        }
-
-        controller.currentState = DuplicantController.WorkerState.Working;
-        yield return new WaitForSeconds(
-            controller.workDuration
-            / Mathf.Max(0.05f, controller.WorkEfficiencyMultiplier));
-
-        if (!TaskManager.Instance.IsTaskValid(task))
-        {
-            RemoveDestroyedTargetTask(task, "O alvo mudou durante o trabalho.");
-            yield break;
-        }
-
-        TaskManager.Instance?.ExecuteTask(task, controller);
-        TaskManager.Instance?.RemoveTask(task);
-        FinishCurrentTask();
     }
 
     private IEnumerator CollectAdditionalGroundItems(ResourceType type)
@@ -1129,11 +871,7 @@ private readonly DuplicantBlueprintDeliveryPlan
 
     private void ReleaseFoodReservation()
     {
-        if (reservedFoodSource != null)
-        {
-            reservedFoodSource.ReleaseReservation(controller);
-            reservedFoodSource = null;
-        }
+        mealExecutor?.Cancel();
     }
 
     private Vector3 GetSafeDropPosition()
