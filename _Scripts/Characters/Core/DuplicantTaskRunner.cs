@@ -15,7 +15,6 @@ public class DuplicantTaskRunner : MonoBehaviour
     private DuplicantPathFollower pathFollower;
     private DuplicantResourceCollector resourceCollector;
     private DuplicantMealExecutor mealExecutor;
-    private bool pathFollowSucceeded;
     private readonly DuplicantStorageReservation storageReservation =
         new DuplicantStorageReservation();
     private Task activeTask;
@@ -31,6 +30,10 @@ public class DuplicantTaskRunner : MonoBehaviour
     private DuplicantWorkExecutor workExecutor;
     private DuplicantBlueprintDeliveryExecutor
     blueprintDeliveryExecutor;
+    private DuplicantInventoryStorer inventoryStorer;
+    private DuplicantTaskFinisher taskFinisher;
+    private DuplicantGroundHaulExecutor
+    groundHaulExecutor;
     public TaskFailureReason LastFailureReason =>
     diagnostics.LastFailureReason;
     public TaskInterruptionOrigin LastInterruptionOrigin =>
@@ -128,6 +131,26 @@ public class DuplicantTaskRunner : MonoBehaviour
             inventory,
             pathFollower);
 
+        groundHaulExecutor =
+        new DuplicantGroundHaulExecutor(
+            controller,
+            inventory,
+            pathFollower,
+            storageReservation,
+            groundHaulState,
+            this,
+            GetSafeDropPosition);
+
+        inventoryStorer = new DuplicantInventoryStorer(
+            controller,
+            inventory,
+            pathFollower,
+            storageReservation);
+
+        taskFinisher = new DuplicantTaskFinisher(
+            controller,
+            movement);
+
         blueprintDeliveryExecutor =
         new DuplicantBlueprintDeliveryExecutor(
             controller,
@@ -197,74 +220,37 @@ public class DuplicantTaskRunner : MonoBehaviour
 
     public IEnumerator StoreCarriedInventoryRoutine()
     {
-        if (inventory == null || !inventory.HasItem
-            || !inventory.CarriedType.HasValue)
+        yield return inventoryStorer.StoreCarriedInventory();
+
+        switch (inventoryStorer.Result)
         {
-            yield break;
+            case InventoryStoreResult.Stored:
+            case InventoryStoreResult.NothingToStore:
+                controller.currentState =
+                    DuplicantController.WorkerState.Idle;
+
+                yield break;
+
+            default:
+                ReleaseStorageReservation();
+
+                if (inventory != null && inventory.HasItem)
+                {
+                    inventory.DropCarriedItem(
+                        GetSafeDropPosition());
+                }
+
+                controller.currentState =
+                    DuplicantController.WorkerState.Idle;
+
+                yield break;
         }
-
-        ResourceType type = inventory.CarriedType.Value;
-        int amount = inventory.CarriedAmount;
-
-        if (StructureManager.Instance == null
-            || !StructureManager.Instance.TryReserveReachableStorage(
-                type,
-                amount,
-                controller.gridPosition,
-                out IStorage storage))
-        {
-            inventory.DropCarriedItem(GetSafeDropPosition());
-            controller.currentState = DuplicantController.WorkerState.Idle;
-            yield break;
-        }
-
-        if (!storageReservation.Track(
-                storage,
-                type,
-                amount))
-        {
-            inventory.DropCarriedItem(GetSafeDropPosition());
-            controller.currentState =
-                DuplicantController.WorkerState.Idle;
-
-            yield break;
-        }
-
-        List<Vector2Int> path =
-            TaskNavigationUtility.GetPathToInteractionPosition(
-                controller.gridPosition,
-                storageReservation.StoragePosition,
-                true,
-                controller.capabilityProfile);
-
-        pathFollowSucceeded = false;
-        if (path != null)
-        {
-            yield return StartCoroutine(FollowPathToInteractionPosition(
-                storageReservation.StoragePosition,
-                path));
-        }
-
-        if (pathFollowSucceeded && TryStoreReservedInventory())
-        {
-            ClearStorageReservationTracking();
-            inventory.Clear();
-        }
-        else
-        {
-            ReleaseStorageReservation();
-            inventory.DropCarriedItem(GetSafeDropPosition());
-        }
-
-        controller.currentState = DuplicantController.WorkerState.Idle;
     }
 
     public IEnumerator ExecuteEatingRoutine(MealPlan mealPlan)
     {
         yield return mealExecutor.Execute(mealPlan);
 
-        // Mantém o estado usado pelo runner consistente.
-        pathFollowSucceeded = pathFollower.Succeeded;
     }
 
     public void CancelEmergencyFoodState()
@@ -286,8 +272,6 @@ public class DuplicantTaskRunner : MonoBehaviour
         }
 
         yield return blueprintDeliveryExecutor.Execute(task);
-
-        pathFollowSucceeded = pathFollower.Succeeded;
 
         switch (blueprintDeliveryExecutor.Result)
         {
@@ -353,8 +337,6 @@ public class DuplicantTaskRunner : MonoBehaviour
     {
         yield return workExecutor.ExecuteAssembly(task, path);
 
-        pathFollowSucceeded = pathFollower.Succeeded;
-
         switch (workExecutor.Result)
         {
             case TaskWorkExecutionResult.Completed:
@@ -403,216 +385,86 @@ public class DuplicantTaskRunner : MonoBehaviour
         }
     }
 
-    private IEnumerator FetchResourceRoutine(
-        ResourceType type,
-        int targetAmount)
-    {
-        yield return resourceCollector.Fetch(
-            type,
-            targetAmount);
-
-        // Mantém a compatibilidade com o restante do runner.
-        pathFollowSucceeded = pathFollower.Succeeded;
-    }
-
     private IEnumerator ExecuteGroundHaulRoutine(
         Task task,
         List<Vector2Int> initialPath)
     {
-        ResourceItem item = task.targetItem;
-        groundHaulState.SetActiveItem(item);
+        yield return groundHaulExecutor.Execute(
+            task,
+            initialPath);
 
-        if (item == null
-            || !item.gameObject.activeInHierarchy
-            || !item.IsReadyForHaul
-            || item.amount <= 0
-            || StructureManager.Instance == null)
+        switch (groundHaulExecutor.Result)
         {
-            RemoveInvalidTask(task);
-            yield break;
+            case GroundHaulExecutionResult.Completed:
+                FinishCurrentTask();
+                yield break;
+
+            case GroundHaulExecutionResult.InvalidTarget:
+                RemoveInvalidTask(task);
+                yield break;
+
+            case GroundHaulExecutionResult.ItemReservedByOther:
+                CancelTask(
+                    task,
+                    TaskFailureReason.ResourceUnavailable,
+                    "Outro duplicant já está coletando este item.");
+                yield break;
+
+            case GroundHaulExecutionResult.StorageUnavailable:
+                CancelTask(
+                    task,
+                    TaskFailureReason.StorageUnavailable,
+                    "Não existe baú alcançável com espaço suficiente.");
+                yield break;
+
+            case GroundHaulExecutionResult.StorageReservationFailed:
+                CancelTask(
+                    task,
+                    TaskFailureReason.ReservationFailed,
+                    "Não foi possível registrar a reserva do baú.");
+                yield break;
+
+            case GroundHaulExecutionResult.ItemUnreachable:
+                CancelTask(
+                    task,
+                    TaskFailureReason.TargetUnreachable,
+                    "Não foi possível chegar ao item.");
+                yield break;
+
+            case GroundHaulExecutionResult.ItemUnavailable:
+                CancelTask(
+                    task,
+                    TaskFailureReason.ResourceUnavailable,
+                    "O item não estava mais disponível para coleta.");
+                yield break;
+
+            case GroundHaulExecutionResult.InventoryRejected:
+                CancelTask(
+                    task,
+                    TaskFailureReason.ResourceUnavailable,
+                    "O inventário recusou o item coletado.");
+                yield break;
+
+            case GroundHaulExecutionResult
+                .StorageUnreachableAfterPickup:
+
+                FailGroundHaulAfterPickup(
+                    task,
+                    TaskFailureReason.StorageUnreachable,
+                    "O baú ficou inalcançável antes da entrega.");
+                yield break;
+
+            case GroundHaulExecutionResult.StorageRejected:
+                FailGroundHaulAfterPickup(
+                    task,
+                    TaskFailureReason.StorageUnavailable,
+                    "O baú recusou o item reservado.");
+                yield break;
+
+            default:
+                RemoveInvalidTask(task);
+                yield break;
         }
-
-        if (!groundHaulState.TryReserveItem(item, this))
-        {
-            CancelTask(task, TaskFailureReason.ResourceUnavailable,
-                "Outro duplicant já está coletando este item.");
-            yield break;
-        }
-
-        if (inventory.HasItem && inventory.CarriedType != item.type)
-        {
-            inventory.DropCarriedItem(GetSafeDropPosition());
-        }
-
-        int pickupAmount = Mathf.Min(
-            item.amount,
-            inventory.SpaceRemaining
-        );
-
-        int amountToStore = inventory.CarriedAmount + pickupAmount;
-
-        if (amountToStore <= 0
-            || !StructureManager.Instance.TryReserveReachableStorage(
-                item.type,
-                amountToStore,
-                GridManager.Instance.WorldToGridPosition(
-                    item.transform.position
-                ),
-                out IStorage storage))
-        {
-            CancelTask(task, TaskFailureReason.StorageUnavailable,
-                "Não existe baú alcançável com espaço suficiente.");
-            yield break;
-        }
-
-        if (!storageReservation.Track(
-                storage,
-                item.type,
-                amountToStore))
-        {
-            CancelTask(
-                task,
-                TaskFailureReason.ReservationFailed,
-                "Não foi possível registrar a reserva do baú.");
-
-            yield break;
-        }
-
-        Vector2Int itemPosition =
-            GridManager.Instance.WorldToGridPosition(item.transform.position);
-
-        List<Vector2Int> pathToItem = initialPath;
-
-        if (pathToItem == null || task.gridPosition != itemPosition)
-        {
-            pathToItem = PathfindingAStar.Instance?.FindPath(
-                controller.gridPosition,
-                itemPosition,
-                controller.capabilityProfile
-            );
-
-            task.gridPosition = itemPosition;
-        }
-
-        yield return StartCoroutine(
-            FollowPathToPosition(itemPosition, pathToItem)
-        );
-
-        if (!pathFollowSucceeded
-            || item == null
-            || !item.gameObject.activeInHierarchy)
-        {
-            ReleaseStorageReservation();
-            CancelTask(task, TaskFailureReason.TargetUnreachable,
-                "Não foi possível chegar ao item.");
-            yield break;
-        }
-
-        int requestedPickup = Mathf.Min(
-            pickupAmount,
-            inventory.SpaceRemaining
-        );
-
-        if (!item.TryTake(requestedPickup, out int takenAmount))
-        {
-            ReleaseGroundItemReservation();
-            ReleaseStorageReservation();
-            CancelTask(task, TaskFailureReason.ResourceUnavailable,
-                "O item não estava mais disponível para coleta.");
-            yield break;
-        }
-
-        ReleaseGroundItemReservation();
-
-        int acceptedPickup = inventory.AddItem(item.type, takenAmount);
-
-        if (acceptedPickup < takenAmount)
-        {
-            int rejectedAmount = takenAmount - acceptedPickup;
-            item.ReturnAmount(rejectedAmount);
-        }
-
-        if (acceptedPickup <= 0)
-        {
-            ReleaseStorageReservation();
-            CancelTask(task, TaskFailureReason.ResourceUnavailable,
-                "O inventário recusou o item coletado.");
-            yield break;
-        }
-
-        groundHaulState.MarkItemCollected();
-        task.MarkGroundHaulCarrying(this);
-
-        int unusedReservation =
-           storageReservation.ReservedAmount
-           - inventory.CarriedAmount;
-
-        if (unusedReservation > 0)
-        {
-            storageReservation.ReleaseAmount(
-                unusedReservation);
-        }
-
-        if (item.amount <= 0)
-        {
-            item.Recycle();
-        }
-
-        yield return StartCoroutine(CollectAdditionalGroundItems(item.type));
-
-        List<Vector2Int> pathToStorage =
-            TaskNavigationUtility.GetPathToInteractionPosition(
-                controller.gridPosition,
-                storageReservation.StoragePosition,
-                true,
-                controller.capabilityProfile
-            );
-
-        if (pathToStorage == null)
-        {
-            FailGroundHaulAfterPickup(
-                task,
-                TaskFailureReason.StorageUnreachable,
-                "O baú ficou inalcançável antes da entrega."
-            );
-            yield break;
-        }
-
-        yield return StartCoroutine(
-            FollowPathToInteractionPosition(
-                storageReservation.StoragePosition,
-                pathToStorage
-            )
-        );
-
-        if (!pathFollowSucceeded
-            || !TryStoreReservedInventory())
-        {
-            FailGroundHaulAfterPickup(
-                task,
-                pathFollowSucceeded
-                    ? TaskFailureReason.StorageUnavailable
-                    : TaskFailureReason.StorageUnreachable,
-                pathFollowSucceeded
-                    ? "O baú recusou o item reservado."
-                    : "O caminho até o baú foi bloqueado."
-            );
-            yield break;
-        }
-
-        ClearStorageReservationTracking();
-        inventory.Clear();
-
-        TaskManager.Instance?.RemoveTask(task);
-
-        if (item != null
-            && item.gameObject.activeInHierarchy
-            && item.amount > 0)
-        {
-            TaskManager.Instance?.AddHaulTask(item);
-        }
-
-        FinishCurrentTask();
     }
 
     private IEnumerator ExecuteGenericTaskRoutine(
@@ -620,8 +472,6 @@ public class DuplicantTaskRunner : MonoBehaviour
         List<Vector2Int> path)
     {
         yield return workExecutor.ExecuteGeneric(task, path);
-
-        pathFollowSucceeded = pathFollower.Succeeded;
 
         switch (workExecutor.Result)
         {
@@ -654,134 +504,6 @@ public class DuplicantTaskRunner : MonoBehaviour
                     "A execução da tarefa terminou em estado inválido.");
                 yield break;
         }
-    }
-
-    private IEnumerator CollectAdditionalGroundItems(ResourceType type)
-    {
-        while (inventory.SpaceRemaining > 0)
-        {
-            if (TaskManager.Instance == null
-                || !TaskManager.Instance.TryAssignAdditionalGroundHaulTask(
-                    controller.gridPosition,
-                    type,
-                    controller.capabilityProfile,
-                    out Task additionalTask,
-                    out List<Vector2Int> path))
-            {
-                yield break;
-            }
-
-            ResourceItem item = additionalTask.targetItem;
-            groundHaulState.TrackAdditionalTask(additionalTask);
-
-            if (item == null
-                || !item.gameObject.activeInHierarchy
-                || !item.IsReadyForHaul
-                || item.type != type
-                || item.amount <= 0)
-            {
-                ReleaseAdditionalHaulTask(true);
-                continue;
-            }
-
-            if (!groundHaulState.TryReserveItem(item, this))
-            {
-                ReleaseAdditionalHaulTask();
-                yield break;
-            }
-
-            Vector2Int itemPosition = GridManager.Instance.WorldToGridPosition(
-                item.transform.position
-            );
-
-            yield return StartCoroutine(FollowPathToPosition(itemPosition, path));
-
-            if (!pathFollowSucceeded || item == null
-                || !item.gameObject.activeInHierarchy)
-            {
-                ReleaseGroundItemReservation();
-                ReleaseAdditionalHaulTask();
-                yield break;
-            }
-
-            int amountToTake = Mathf.Min(item.amount, inventory.SpaceRemaining);
-            if (!TryExpandStorageReservation(amountToTake))
-            {
-                ReleaseGroundItemReservation();
-                ReleaseAdditionalHaulTask();
-                yield break;
-            }
-
-            if (!item.TryTake(amountToTake, out int takenAmount))
-            {
-                ReleaseStorageReservationAmount(amountToTake);
-                ReleaseGroundItemReservation();
-                ReleaseAdditionalHaulTask();
-                yield break;
-            }
-
-            int acceptedAmount = inventory.AddItem(type, takenAmount);
-            int rejectedAmount = takenAmount - acceptedAmount;
-
-            if (rejectedAmount > 0)
-            {
-                item.ReturnAmount(rejectedAmount);
-                ReleaseStorageReservationAmount(rejectedAmount);
-            }
-
-            ReleaseGroundItemReservation();
-
-            if (item.amount <= 0)
-            {
-                item.Recycle();
-                ReleaseAdditionalHaulTask(true);
-            }
-            else
-            {
-                ReleaseAdditionalHaulTask();
-            }
-        }
-    }
-
-    private IEnumerator FollowTaskPath(
-        Task task,
-        List<Vector2Int> initialPath)
-    {
-        pathFollowSucceeded = false;
-
-        yield return pathFollower.FollowTask(
-            task,
-            initialPath);
-
-        pathFollowSucceeded = pathFollower.Succeeded;
-    }
-
-    private IEnumerator FollowPathToPosition(
-        Vector2Int targetPosition,
-        List<Vector2Int> initialPath)
-    {
-        pathFollowSucceeded = false;
-
-        yield return pathFollower.FollowPosition(
-            targetPosition,
-            initialPath);
-
-        pathFollowSucceeded = pathFollower.Succeeded;
-    }
-
-    private IEnumerator FollowPathToInteractionPosition(
-        Vector2Int targetPosition,
-        List<Vector2Int> initialPath,
-        Vector2Int? fixedInteractionPosition = null)
-    {
-        pathFollowSucceeded = false;
-
-        yield return pathFollower.FollowInteraction(
-            targetPosition,
-            initialPath,
-            fixedInteractionPosition);
-
-        pathFollowSucceeded = pathFollower.Succeeded;
     }
 
     public void CancelActiveTaskState(bool preserveCarriedInventory = false)
@@ -913,26 +635,6 @@ public class DuplicantTaskRunner : MonoBehaviour
         groundHaulState.ReleaseAdditionalTask(removeTask);
     }
 
-    private void ClearStorageReservationTracking()
-    {
-        storageReservation.Complete();
-    }
-
-    private bool TryStoreReservedInventory()
-    {
-        return storageReservation.TryStore(inventory);
-    }
-
-    private bool TryExpandStorageReservation(int amount)
-    {
-        return storageReservation.TryExpand(amount);
-    }
-
-    private void ReleaseStorageReservationAmount(int amount)
-    {
-        storageReservation.ReleaseAmount(amount);
-    }
-
     private void FailGroundHaulAfterPickup(
         Task task,
         TaskFailureReason reason = TaskFailureReason.StorageUnreachable,
@@ -969,24 +671,6 @@ public class DuplicantTaskRunner : MonoBehaviour
         RecordFailure(TaskFailureReason.TargetDestroyed, details);
         ReleaseAllReservations();
         TaskManager.Instance?.RemoveTask(task);
-        FinishCurrentTask();
-    }
-
-    private void AbortDeliveryTask(
-        Task task,
-        TaskFailureReason reason,
-        string details)
-    {
-        RecordFailure(reason, details);
-        ReleaseAllReservations();
-
-        if (inventory.HasItem)
-        {
-            inventory.DropCarriedItem(GetSafeDropPosition());
-        }
-
-        TaskManager.Instance?.RemoveTask(task);
-        task.targetBlueprint?.NotifyTaskEnded(task);
         FinishCurrentTask();
     }
 
@@ -1034,45 +718,10 @@ public class DuplicantTaskRunner : MonoBehaviour
         diagnostics.RecordFailure(reason, details);
     }
 
-    private void BeginPathDiagnostics(
-        Vector2Int destination,
-        List<Vector2Int> path,
-        int maxReplans)
-    {
-        diagnostics.BeginPath(
-            destination,
-            path,
-            maxReplans
-        );
-    }
-
-    private void UpdatePathDiagnostics(
-        List<Vector2Int> path,
-        int pathIndex,
-        int replanCount)
-    {
-        diagnostics.UpdatePath(
-            path,
-            pathIndex,
-            replanCount
-        );
-    }
-
-    private void ResetPathDiagnostics()
-    {
-        diagnostics.ResetPath();
-    }
-
     private void FinishCurrentTask()
     {
-        ReleaseAllReservations();
-        ClearGroundHaulTracking();
-        controller.currentTask = null;
-        controller.currentState = DuplicantController.WorkerState.Idle;
-
-        if (movement.ShouldFall())
-        {
-            StartCoroutine(movement.HandleFallingRoutine());
-        }
+        taskFinisher.Finish(
+            ReleaseAllReservations,
+            ClearGroundHaulTracking);
     }
 }
