@@ -1,7 +1,8 @@
 using UnityEngine;
 
-public class PrintingPod : MonoBehaviour, IDismantlable
+public class PrintingPod : MonoBehaviour, IDismantlable, IConfiguredStructureBehaviour
 {
+    public bool UsesSpecializedSaveData => true;
     public static PrintingPod Instance { get; private set; }
 
     [Header("Estado")]
@@ -90,6 +91,20 @@ public class PrintingPod : MonoBehaviour, IDismantlable
     public void SetGridPosition(Vector2Int position)
     {
         gridPosition = position;
+    }
+
+    public void InitializeStructureBehaviour(ConfiguredStructure structure)
+    {
+        if (structure == null) return;
+        SetGridPosition(structure.GridPosition);
+        StructureManager.Instance?.RegisterPrintingPod(structure.GridPosition, this);
+        SetOperational(true);
+    }
+
+    public void ShutdownStructureBehaviour()
+    {
+        SetOperational(false);
+        StructureManager.Instance?.UnregisterPrintingPod(gridPosition);
     }
 
     public bool TryGetRewardDropPosition(out Vector3 worldPosition)

@@ -3,13 +3,17 @@ using UnityEngine;
 
 public class StructureManager : Singleton<StructureManager>
 {
-    [Header("Prefabs de Estruturas")]
+    [Header("Fallback legado — não usar em novas construções")]
+    [Tooltip("Usado somente para carregar conteúdo antigo sem Definition Id.")]
     [SerializeField] private GameObject chestPrefab;
+    [Tooltip("Usado somente para carregar conteúdo antigo sem Definition Id.")]
     [SerializeField] private GameObject printingPodPrefab;
 
     private readonly Dictionary<Vector2Int, StorageStructure> activeStorages = new Dictionary<Vector2Int, StorageStructure>();
     private readonly Dictionary<Vector2Int, PrintingPod> activePrintingPods =
         new Dictionary<Vector2Int, PrintingPod>();
+    private readonly Dictionary<Vector2Int, ConfiguredStructure> activeConfiguredStructures =
+        new Dictionary<Vector2Int, ConfiguredStructure>();
 
     public PrintingPod GetPrintingPodAt(Vector2Int position)
     {
@@ -34,11 +38,12 @@ public class StructureManager : Singleton<StructureManager>
         activePrintingPods[position] = printingPod;
         printingPod.SetGridPosition(position);
 
-        if (GridManager.Instance != null
+        if (printingPod.GetComponent<ConfiguredStructure>() == null
+            && GridManager.Instance != null
             && !GridManager.Instance.RegisterFootprint(
                 printingPod,
                 position,
-                StructureFootprintSettings.Resolve(TileType.PrintingPod),
+                ResolveFootprint(position, TileType.PrintingPod),
                 false))
         {
             Debug.LogError(
@@ -71,11 +76,12 @@ public class StructureManager : Singleton<StructureManager>
         }
 
         storage.SetGridPosition(pos);
-        if (GridManager.Instance != null
+        if (storage.GetComponent<ConfiguredStructure>() == null
+            && GridManager.Instance != null
             && !GridManager.Instance.RegisterFootprint(
                 storage,
                 pos,
-                StructureFootprintSettings.Resolve(TileType.Chest),
+                ResolveFootprint(pos, TileType.Chest),
                 false))
         {
             Debug.LogError(
@@ -141,9 +147,21 @@ public class StructureManager : Singleton<StructureManager>
 
     public void ClearStructuresForLoad()
     {
+        HashSet<GameObject> destroyedObjects = new HashSet<GameObject>();
+
+        foreach (ConfiguredStructure structure in activeConfiguredStructures.Values)
+        {
+            if (structure == null) continue;
+            structure.ShutdownBehaviours();
+            GridManager.Instance?.UnregisterFootprint(structure);
+            destroyedObjects.Add(structure.gameObject);
+            structure.gameObject.SetActive(false);
+            Destroy(structure.gameObject);
+        }
+
         foreach (StorageStructure storage in activeStorages.Values)
         {
-            if (storage != null)
+            if (storage != null && !destroyedObjects.Contains(storage.gameObject))
             {
                 GridManager.Instance?.UnregisterFootprint(storage);
                 storage.gameObject.SetActive(false);
@@ -153,7 +171,7 @@ public class StructureManager : Singleton<StructureManager>
 
         foreach (PrintingPod printingPod in activePrintingPods.Values)
         {
-            if (printingPod != null)
+            if (printingPod != null && !destroyedObjects.Contains(printingPod.gameObject))
             {
                 GridManager.Instance?.UnregisterFootprint(printingPod);
                 printingPod.SetOperational(false);
@@ -164,6 +182,76 @@ public class StructureManager : Singleton<StructureManager>
 
         activeStorages.Clear();
         activePrintingPods.Clear();
+        activeConfiguredStructures.Clear();
+    }
+
+    public List<ConfiguredStructure> GetRegisteredConfiguredStructures()
+    {
+        List<ConfiguredStructure> result = new List<ConfiguredStructure>();
+        foreach (ConfiguredStructure structure in activeConfiguredStructures.Values)
+        {
+            if (structure != null) result.Add(structure);
+        }
+        return result;
+    }
+
+    public bool RegisterConfiguredStructure(
+        ConfiguredStructure structure,
+        BuildDefinitionSO definition)
+    {
+        if (structure == null || definition == null || GridManager.Instance == null)
+        {
+            return false;
+        }
+
+        Vector2Int position = structure.GridPosition;
+        if (!GridManager.Instance.RegisterFootprint(
+                structure,
+                position,
+                definition.GetFootprint(),
+                false))
+        {
+            Debug.LogError(
+                $"[StructureManager] Falha ao registrar '{definition.DefinitionId}' em {position}.",
+                structure);
+            return false;
+        }
+
+        activeConfiguredStructures[position] = structure;
+        return true;
+    }
+
+    public void SpawnStructure(Vector2Int position, BuildDefinitionSO definition)
+    {
+        if (definition == null || definition.Prefab == null || GridManager.Instance == null)
+        {
+            return;
+        }
+
+        if (GridManager.Instance.GetOccupantAt(position, GridLayer.Structure) != null)
+        {
+            return;
+        }
+
+        GameObject obj = Instantiate(
+            definition.Prefab,
+            GridManager.Instance.GridToWorldPosition(position),
+            Quaternion.identity);
+        ConfiguredStructure structure = obj.GetComponent<ConfiguredStructure>();
+        if (structure == null)
+        {
+            Debug.LogError(
+                $"[StructureManager] O prefab de '{definition.DefinitionId}' precisa de ConfiguredStructure no objeto raiz.",
+                obj);
+            Destroy(obj);
+            return;
+        }
+
+        structure.Initialize(position, definition);
+        if (!structure.IsInitialized)
+        {
+            Destroy(obj);
+        }
     }
 
     public List<StorageStructure> GetStoragesWithResource(
@@ -415,12 +503,43 @@ public class StructureManager : Singleton<StructureManager>
             return;
         }
 
+        ConfiguredStructure configured =
+            GridManager.Instance.GetOccupantAt(position, GridLayer.Structure)
+                as ConfiguredStructure;
+
+        if (configured != null)
+        {
+            PrintingPod configuredPod = configured.GetComponent<PrintingPod>();
+            if (configuredPod != null)
+            {
+                DismantlePrintingPod(configured.GridPosition, configuredPod);
+                return;
+            }
+
+            StorageStructure configuredStorage = configured.GetComponent<StorageStructure>();
+            if (configuredStorage != null)
+            {
+                DismantleStorage(configured.GridPosition, configuredStorage, configured);
+                return;
+            }
+
+            DismantleConfiguredStructure(configured);
+            return;
+        }
+
         StorageStructure storage = GetStorageAt(position);
 
         // A estrutura já foi marcada quando a tarefa foi criada.
         if (storage == null) return;
 
-        position = storage.GridPosition;
+        DismantleStorage(storage.GridPosition, storage, null);
+    }
+
+    private void DismantleStorage(
+        Vector2Int position,
+        StorageStructure storage,
+        ConfiguredStructure configured)
+    {
 
         if (!storage.IsBeingDismantled)
         {
@@ -463,6 +582,11 @@ public class StructureManager : Singleton<StructureManager>
 
         // 4. DESREGISTRA E LIMPA A CÉLULA NO GRID
         UnregisterStorage(position);
+        if (configured != null)
+        {
+            activeConfiguredStructures.Remove(position);
+            GridManager.Instance.UnregisterFootprint(configured);
+        }
         GridManager.Instance.SetTileType(position.x, position.y, TileType.Empty);
 
         // 5. DESTRÓI O GAMEOBJECT FÍSICO
@@ -472,6 +596,48 @@ public class StructureManager : Singleton<StructureManager>
 
         // 6. FEEDBACK VISUAL
         GameEvents.TriggerFloatingTextRequested("Estrutura Desmontada", spawnPos, Color.yellow);
+    }
+
+    private void DismantleConfiguredStructure(ConfiguredStructure structure)
+    {
+        Vector2Int anchor = structure.GridPosition;
+        BuildDefinitionSO definition =
+            BuildCatalogService.Instance?.GetById(structure.DefinitionId);
+        Vector3 world = GridManager.Instance.GridToWorldPosition(anchor);
+
+        if (definition != null && definition.RefundAmount > 0)
+        {
+            ItemSpawner.Instance?.SpawnResource(
+                definition.RequiredResource,
+                world,
+                definition.RefundAmount);
+            GameEvents.TriggerFloatingTextRequested(
+                $"Reembolso: +{definition.RefundAmount} {definition.RequiredResource}",
+                world,
+                Color.green);
+        }
+
+        structure.ShutdownBehaviours();
+        activeConfiguredStructures.Remove(anchor);
+        GridManager.Instance.UnregisterFootprint(structure);
+        GridManager.Instance.SetTileType(anchor.x, anchor.y, TileType.Empty, GridLayer.Structure);
+        Destroy(structure.gameObject);
+        StockpileManager.Instance?.RequestRefresh();
+        GameEvents.TriggerFloatingTextRequested("Estrutura Desmontada", world, Color.yellow);
+    }
+
+    private static StructureFootprintDefinition ResolveFootprint(
+        Vector2Int position,
+        TileType fallbackType)
+    {
+        string id = GridManager.Instance?.GetContentId(
+            position.x,
+            position.y,
+            GridLayer.Structure);
+        BuildDefinitionSO definition = BuildCatalogService.Instance?.GetById(id);
+        return definition != null
+            ? definition.GetFootprint()
+            : StructureFootprintSettings.Resolve(fallbackType);
     }
 
     private void DismantlePrintingPod(
@@ -503,7 +669,13 @@ public class StructureManager : Singleton<StructureManager>
                 Color.green);
         }
 
+        ConfiguredStructure configured = printingPod.GetComponent<ConfiguredStructure>();
         UnregisterPrintingPod(position);
+        if (configured != null)
+        {
+            activeConfiguredStructures.Remove(position);
+            GridManager.Instance.UnregisterFootprint(configured);
+        }
         GridManager.Instance.SetTileType(
             position.x,
             position.y,

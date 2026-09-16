@@ -1,8 +1,11 @@
 using System.Collections.Generic;
 using UnityEngine;
+using Unity.Profiling;
 
 public class LifeCycleSystem : MonoBehaviour
 {
+    private static readonly ProfilerMarker ProcessNeedsTicksMarker =
+        new ProfilerMarker("Colony.AI.ProcessNeedsTicks");
     public static LifeCycleSystem Instance { get; private set; }
 
     [SerializeField] private LifeCycleSettingsSO settings;
@@ -35,6 +38,7 @@ public class LifeCycleSystem : MonoBehaviour
             FindObjectsInactive.Exclude,
             FindObjectsSortMode.None
         );
+        PerformanceMetricsService.RecordGlobalObjectSearch();
 
         foreach (DuplicantVitals vitals in existing)
         {
@@ -100,6 +104,8 @@ public class LifeCycleSystem : MonoBehaviour
 
     private void ProcessTickBudget()
     {
+        using (ProcessNeedsTicksMarker.Auto())
+        {
         int budget = Mathf.Max(1, settings.maximumDuplicantsPerFrame);
 
         while (budget > 0 && pendingTicks.Count > 0)
@@ -109,9 +115,11 @@ public class LifeCycleSystem : MonoBehaviour
             if (vitals != null && vitals.isActiveAndEnabled)
             {
                 vitals.ApplyTick(settings, settings.tickInterval);
+                PerformanceMetricsService.RecordNeedsTick();
             }
 
             budget--;
+        }
         }
     }
 }
