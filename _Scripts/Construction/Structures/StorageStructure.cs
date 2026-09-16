@@ -2,8 +2,9 @@ using System.Collections.Generic;
 using UnityEngine;
 
 [DisallowMultipleComponent]
-public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantlable, IInteractable
+public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantlable, IInteractable, IConfiguredStructureBehaviour
 {
+    public bool UsesSpecializedSaveData => true;
     [Header("Posição no Grid")]
     [SerializeField] private Vector2Int gridPosition;
     public Vector2Int GridPosition => gridPosition;
@@ -67,6 +68,18 @@ public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantla
     public void SetGridPosition(Vector2Int pos)
     {
         gridPosition = pos;
+    }
+
+    public void InitializeStructureBehaviour(ConfiguredStructure structure)
+    {
+        if (structure == null) return;
+        SetGridPosition(structure.GridPosition);
+        StructureManager.Instance?.RegisterStorage(structure.GridPosition, this);
+    }
+
+    public void ShutdownStructureBehaviour()
+    {
+        StructureManager.Instance?.UnregisterStorage(gridPosition);
     }
 
     public bool CanStoreItem(ResourceType type, int amount)
@@ -133,7 +146,11 @@ public class StorageStructure : MonoBehaviour, IStorage, IFoodSource, IDismantla
         {
             localInventory[type] -= amount;
             GameEvents.TriggerChestUpdated(gridPosition);
-            StockpileManager.Instance?.RefreshReachableResources();
+
+            // O item ainda será transferido para o inventário do duplicant.
+            // Adie o recálculo para evitar uma janela em que o recurso não
+            // aparece nem no baú nem no inventário.
+            StockpileManager.Instance?.RequestRefresh();
             return true;
         }
         return false;

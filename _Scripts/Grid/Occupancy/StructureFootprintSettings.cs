@@ -23,8 +23,8 @@ public sealed class StructureFootprintDefinition
     [Tooltip("Impede duplicants de ocupar as células da estrutura pronta.")]
     public bool blocksMovement = true;
 
-    [Tooltip("Permite que outras entidades se apoiem no topo da estrutura.")]
-    public bool supportsWeight = true;
+    [Tooltip("Permite que outras entidades se apoiem no topo da estrutura. Independente de Blocks Movement.")]
+    public bool supportsWeight = false;
 
     public StructureSupportRule supportRule =
         StructureSupportRule.EveryBottomCell;
@@ -92,7 +92,7 @@ public class StructureFootprintSettings : Singleton<StructureFootprintSettings>
                 height = 3,
                 originOffset = new Vector2Int(-1, 0),
                 blocksMovement = true,
-                supportsWeight = true,
+                supportsWeight = false,
                 supportRule = StructureSupportRule.EveryBottomCell
             };
         }
@@ -106,7 +106,7 @@ public class StructureFootprintSettings : Singleton<StructureFootprintSettings>
                 height = 1,
                 originOffset = Vector2Int.zero,
                 blocksMovement = true,
-                supportsWeight = true,
+                supportsWeight = false,
                 supportRule = StructureSupportRule.EveryBottomCell
             };
         }
@@ -118,7 +118,10 @@ public class StructureFootprintSettings : Singleton<StructureFootprintSettings>
             height = 1,
             originOffset = Vector2Int.zero,
             blocksMovement = tileType != TileType.Ladder,
-            supportsWeight = tileType != TileType.Ladder,
+            // Um fallback nunca deve tornar uma máquina escalável por acidente.
+            // Terreno sólido oferece suporte pela solidez do tile, não por este
+            // footprint de estrutura.
+            supportsWeight = false,
             supportRule = StructureSupportRule.None
         };
     }

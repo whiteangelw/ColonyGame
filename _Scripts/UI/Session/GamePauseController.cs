@@ -25,6 +25,12 @@ public class GamePauseController : MonoBehaviour
 
     private void Update()
     {
+        if (InputContextService.Instance != null
+            && !InputContextService.Instance.IsGameplayKeyboardAllowed)
+        {
+            return;
+        }
+
         if (Keyboard.current == null
             || !Keyboard.current[pauseKey].wasPressedThisFrame)
         {

@@ -13,7 +13,8 @@ public enum TileType
     Ladder,     // Escada
     Chest,
     Bedrock,
-    PrintingPod // Máquina que libera ofertas periódicas de recompensa
+    PrintingPod, // Máquina que libera ofertas periódicas de recompensa
+    Structure    // Estrutura física genérica; movimento vem do footprint
 }
 
 public enum GridLayer
@@ -60,6 +61,7 @@ public class Tile
         this.isPassable = type == TileType.Empty
             || type == TileType.Ladder
             || type == TileType.Chest
-            || type == TileType.PrintingPod;
+            || type == TileType.PrintingPod
+            || type == TileType.Structure;
     }
 }

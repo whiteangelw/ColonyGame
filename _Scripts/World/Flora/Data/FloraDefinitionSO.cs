@@ -7,6 +7,9 @@ public class FloraDefinitionSO : ScriptableObject
     public string floraId = "wild_berry_bush";
     public GameObject prefab;
 
+    [Header("Comportamento")]
+    public bool providesFood = true;
+
     [Header("Alimento")]
     public ResourceType foodResourceType = ResourceType.WildBerry;
     [Min(1)] public int initialPortions = 3;
