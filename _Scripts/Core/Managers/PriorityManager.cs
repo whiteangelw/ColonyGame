@@ -20,6 +20,8 @@ public class PriorityManager : MonoBehaviour
         categoryPriorities[TaskType.Dig] = 5;
         categoryPriorities[TaskType.BuildTile] = 5;
         categoryPriorities[TaskType.HaulResource] = 5;
+        categoryPriorities[TaskType.Dismantle] = 5;
+        categoryPriorities[TaskType.Harvest] = 5;
     }
 
     public void SetCategoryPriority(TaskType type, int priority)

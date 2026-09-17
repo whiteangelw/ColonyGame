@@ -43,6 +43,12 @@ public class CameraController : MonoBehaviour
 
     private void HandleKeyboardMovement()
     {
+        if (InputContextService.Instance != null
+            && !InputContextService.Instance.IsGameplayKeyboardAllowed)
+        {
+            return;
+        }
+
         Vector2 input = Vector2.zero;
 
         if (Keyboard.current != null)

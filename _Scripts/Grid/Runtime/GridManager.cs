@@ -4,21 +4,34 @@ using UnityEngine;
 
 public class GridManager : Singleton<GridManager>, IGridService
 {
+    private bool suppressLegacyStructureSpawn;
     [Header("Configurações do Mapa")]
     public int width = 20;
     public int height = 15;
     public float cellSize = 1.0f;
 
+    [Header("P5E - Regiões")]
+    [SerializeField, Min(8)] private int regionSize = 32;
+
     public bool IsGridReady { get; private set; }
+    public WorldGenerationResult LastGenerationResult { get; private set; }
 
     public int Width => width;
     public int Height => height;
+    public WorldRegionIndex Regions { get; } = new WorldRegionIndex();
+    public int RegionSize => Regions.IsInitialized ? Regions.RegionSize : regionSize;
+    public int RegionColumns => Regions.Columns;
+    public int RegionRows => Regions.Rows;
+    public int RegionCount => Regions.Count;
 
     public event Action<int, int, TileType> OnTileChanged;
+    public event Action<int, int> OnLiquidChanged;
     public event Action<int, int, GridLayer, TileType> OnLayerTileChanged;
     public event Action<GridOccupancyRecord, GridOccupancyChangeType>
         OnOccupancyChanged;
     public event Action OnGridRebuilt;
+    public event Action<WorldGenerationResult> OnWorldGenerated;
+    public event Action<WorldRegionState, WorldRegionDirtyFlags> OnRegionDirty;
 
     private readonly GridData gridData = new GridData();
     private GridOccupancyService occupancyService;
@@ -66,17 +79,26 @@ public class GridManager : Singleton<GridManager>, IGridService
     private void GenerateGrid()
     {
         IsGridReady = false;
+        LastGenerationResult = null;
         ClearOccupancy();
 
         gridData.Create(width, height);
         width = gridData.Width;
         height = gridData.Height;
+        InitializeRegions();
 
         WorldGenerator generator = GetComponent<WorldGenerator>();
 
-        if (generator != null)
+        if (generator != null
+            && generator.TryGenerateWorldData(
+                width,
+                height,
+                out WorldGenerationResult generatedWorld))
         {
-            generator.GenerateWorld();
+            if (gridData.ApplyGenerationResult(generatedWorld))
+            {
+                LastGenerationResult = generatedWorld;
+            }
         }
 
         // Mantém as bordas do mapa protegidas.
@@ -93,6 +115,11 @@ public class GridManager : Singleton<GridManager>, IGridService
 
         IsGridReady = true;
         OnGridRebuilt?.Invoke();
+        Regions.ClearAllDirty(WorldRegionDirtyFlags.All);
+        if (LastGenerationResult != null)
+        {
+            OnWorldGenerated?.Invoke(LastGenerationResult);
+        }
     }
 
     public void BeginSnapshotRestore(int restoredWidth, int restoredHeight)
@@ -100,10 +127,12 @@ public class GridManager : Singleton<GridManager>, IGridService
         width = Mathf.Max(1, restoredWidth);
         height = Mathf.Max(1, restoredHeight);
         IsGridReady = false;
+        LastGenerationResult = null;
         ClearOccupancy();
         gridData.Create(width, height);
         width = gridData.Width;
         height = gridData.Height;
+        InitializeRegions();
     }
 
     public void RestoreTileState(
@@ -139,10 +168,66 @@ public class GridManager : Singleton<GridManager>, IGridService
         tile.reachabilityGroupID = -1;
     }
 
-    public void CompleteSnapshotRestore()
+    public void CompleteSnapshotRestore(bool notifyListeners = true)
     {
         IsGridReady = true;
+        if (notifyListeners)
+        {
+            PublishGridRebuilt();
+        }
+    }
+
+    public void PublishGridRebuilt()
+    {
+        if (!IsGridReady)
+        {
+            return;
+        }
+
         OnGridRebuilt?.Invoke();
+        Regions.ClearAllDirty(WorldRegionDirtyFlags.All);
+    }
+
+    public void MarkRegionDirty(
+        int x,
+        int y,
+        WorldRegionDirtyFlags flags,
+        int paddingInCells = 0)
+    {
+        Regions.MarkCellDirty(x, y, flags, paddingInCells);
+    }
+
+    public void MarkRegionBoundsDirty(
+        int minimumX,
+        int minimumY,
+        int maximumX,
+        int maximumY,
+        WorldRegionDirtyFlags flags)
+    {
+        Regions.MarkBoundsDirty(
+            minimumX,
+            minimumY,
+            maximumX,
+            maximumY,
+            flags);
+    }
+
+    public int GetDirtyRegionCount(WorldRegionDirtyFlags flags)
+    {
+        return Regions.CountDirty(flags);
+    }
+
+    [ContextMenu("P5E - Log Region Diagnostics")]
+    private void LogRegionDiagnostics()
+    {
+        Debug.Log(
+            $"[P5E] World={width}x{height}, Region={RegionSize}x{RegionSize}, "
+            + $"Grid={RegionColumns}x{RegionRows}, Total={RegionCount}, "
+            + $"Terrain={GetDirtyRegionCount(WorldRegionDirtyFlags.Terrain)}, "
+            + $"Navigation={GetDirtyRegionCount(WorldRegionDirtyFlags.Navigation)}, "
+            + $"Liquid={GetDirtyRegionCount(WorldRegionDirtyFlags.Liquid)}, "
+            + $"Fog={GetDirtyRegionCount(WorldRegionDirtyFlags.Fog)}, "
+            + $"Visual={GetDirtyRegionCount(WorldRegionDirtyFlags.Visual)}");
     }
 
     public Tile GetTile(int x, int y)
@@ -155,6 +240,33 @@ public class GridManager : Singleton<GridManager>, IGridService
     public Tile GetTile(Vector2Int gridPos)
     {
         return GetTile(gridPos.x, gridPos.y);
+    }
+
+    /// <summary>
+    /// Ponto único de escrita do líquido durante o gameplay. A simulação
+    /// continua separada; este método apenas publica mudanças reais.
+    /// </summary>
+    public bool SetLiquidAmount(int x, int y, float amount)
+    {
+        Tile tile = GetTile(x, y);
+        if (tile == null)
+        {
+            return false;
+        }
+
+        float normalizedAmount = Mathf.Max(0f, amount);
+        if (tile.liquidAmount == normalizedAmount)
+        {
+            return false;
+        }
+
+        tile.liquidAmount = normalizedAmount;
+        MarkRegionDirty(
+            x,
+            y,
+            WorldRegionDirtyFlags.Liquid | WorldRegionDirtyFlags.Visual);
+        OnLiquidChanged?.Invoke(x, y);
+        return true;
     }
 
     public TileType GetTileType(int x, int y)
@@ -179,16 +291,35 @@ public class GridManager : Singleton<GridManager>, IGridService
         TileType tileType,
         GridLayer layer)
     {
+        BuildDefinitionSO definition =
+            BuildCatalogService.Instance?.GetById(definitionId);
+
         if (layer == GridLayer.Terrain || layer == GridLayer.Structure)
         {
-            SetTileType(x, y, tileType);
+            suppressLegacyStructureSpawn = true;
+            try
+            {
+                SetTileType(x, y, tileType);
+            }
+            finally
+            {
+                suppressLegacyStructureSpawn = false;
+            }
             gridData.SetContentId(x, y, layer, definitionId);
             OnLayerTileChanged?.Invoke(x, y, layer, tileType);
+
+            if (definition != null && definition.HasPhysicalPrefab)
+            {
+                StructureManager.Instance?.SpawnStructure(
+                    new Vector2Int(x, y),
+                    definition);
+            }
             return;
         }
 
         if (!gridData.SetTileType(x, y, layer, tileType)) return;
         gridData.SetContentId(x, y, layer, definitionId);
+        MarkRegionDirty(x, y, WorldRegionDirtyFlags.Visual);
         OnLayerTileChanged?.Invoke(x, y, layer, tileType);
     }
 
@@ -207,6 +338,7 @@ public class GridManager : Singleton<GridManager>, IGridService
         }
 
         if (!gridData.SetTileType(x, y, layer, newType)) return;
+        MarkRegionDirty(x, y, WorldRegionDirtyFlags.Visual);
         OnLayerTileChanged?.Invoke(x, y, layer, newType);
     }
 
@@ -255,7 +387,16 @@ public class GridManager : Singleton<GridManager>, IGridService
         }
         tile.isPassable = !isSolid;
 
-        if (createsStructure)
+        MarkRegionDirty(
+            x,
+            y,
+            WorldRegionDirtyFlags.Terrain
+            | WorldRegionDirtyFlags.Navigation
+            | WorldRegionDirtyFlags.Liquid
+            | WorldRegionDirtyFlags.Fog
+            | WorldRegionDirtyFlags.Visual);
+
+        if (createsStructure && !suppressLegacyStructureSpawn)
         {
             StructureManager.Instance?.SpawnStructure(
                 new Vector2Int(x, y),
@@ -374,16 +515,50 @@ public class GridManager : Singleton<GridManager>, IGridService
     }
 
     /// <summary>
-    /// Verifica se existe alguma forma de suporte físico abaixo do tile.
+    /// Verifica se existe suporte que a navegação pode usar abaixo do tile.
+    /// Uma ocupação física tem precedência sobre o tile visual: bloquear o
+    /// movimento não a torna automaticamente escalável.
     /// </summary>
     public bool HasSupportBelow(int x, int y)
     {
-        return IsSolid(x, y - 1) || IsLadder(x, y - 1);
+        return HasNavigationSupportAt(x, y - 1);
     }
 
     public bool HasSupportBelow(Vector2Int position)
     {
         return HasSupportBelow(position.x, position.y);
+    }
+
+    public bool HasNavigationSupportAt(int x, int y)
+    {
+        if (!IsInsideGrid(x, y))
+        {
+            return true;
+        }
+
+        Vector2Int supportCell = new Vector2Int(x, y);
+
+        // A ocupação é a fonte de verdade para estruturas físicas. Portanto,
+        // uma Chest/Pod/máquina com supportsWeight=false não vira chão apenas
+        // por bloquear a célula.
+        if (Occupancy.TryGetRecord(
+                supportCell,
+                GridLayer.Structure,
+                out GridOccupancyRecord occupancy))
+        {
+            return !occupancy.IsBlueprint
+                && occupancy.Footprint != null
+                && occupancy.Footprint.supportsWeight;
+        }
+
+        Tile tile = GetTile(x, y);
+        return (tile != null && !tile.isPassable)
+            || IsLadder(x, y);
+    }
+
+    public bool HasNavigationSupportAt(Vector2Int position)
+    {
+        return HasNavigationSupportAt(position.x, position.y);
     }
 
     /// <summary>
@@ -442,7 +617,8 @@ public class GridManager : Singleton<GridManager>, IGridService
         return type != TileType.Empty
             && type != TileType.Ladder
             && type != TileType.Chest
-            && type != TileType.PrintingPod;
+            && type != TileType.PrintingPod
+            && type != TileType.Structure;
     }
 
     public bool CanPlaceFootprint(
@@ -521,6 +697,102 @@ public class GridManager : Singleton<GridManager>, IGridService
         }
         failureReason = string.Empty;
         return true;
+    }
+
+    /// <summary>
+    /// Valida um plano que pode exigir escavação antes da construção.
+    /// Não libera Bedrock, estruturas existentes ou footprints ocupados.
+    /// </summary>
+    public bool CanPlanFootprint(
+        Vector2Int anchor,
+        StructureFootprintDefinition footprint,
+        GridLayer layer,
+        out string failureReason,
+        UnityEngine.Object ignoredOwner = null)
+    {
+        if (layer != GridLayer.Terrain && layer != GridLayer.Structure)
+        {
+            return CanPlaceFootprint(
+                anchor,
+                footprint,
+                layer,
+                out failureReason,
+                ignoredOwner);
+        }
+
+        if (footprint == null)
+        {
+            failureReason = "Definição de footprint ausente.";
+            return false;
+        }
+
+        Vector2Int minimum = footprint.GetMinimumCell(anchor);
+        for (int localX = 0; localX < footprint.width; localX++)
+        {
+            for (int localY = 0; localY < footprint.height; localY++)
+            {
+                Vector2Int cell = minimum + new Vector2Int(localX, localY);
+                Tile tile = GetTile(cell);
+
+                if (tile == null)
+                {
+                    failureReason = "Parte da construção ficaria fora do mapa.";
+                    return false;
+                }
+
+                if (tile.type == TileType.Bedrock)
+                {
+                    failureReason = "Bedrock não pode ser removido para uma construção.";
+                    return false;
+                }
+
+                if (tile.type != TileType.Empty
+                    && !IsTerrainRemovableForBuildPlan(tile.type))
+                {
+                    failureReason = "A célula contém uma construção que não pode ser substituída automaticamente.";
+                    return false;
+                }
+
+                if (Occupancy.IsOccupied(
+                        cell,
+                        GridLayer.Structure,
+                        ignoredOwner))
+                {
+                    failureReason = "A área já está reservada por outra estrutura ou blueprint.";
+                    return false;
+                }
+            }
+        }
+
+        if (!HasRequiredFootprintSupport(anchor, footprint))
+        {
+            failureReason = footprint.supportRule ==
+                StructureSupportRule.EveryBottomCell
+                    ? "Toda a base planejada precisa de apoio."
+                    : "A construção planejada precisa de apoio.";
+            return false;
+        }
+
+        failureReason = string.Empty;
+        return true;
+    }
+
+    public bool IsTerrainRemovableForBuildPlan(TileType tileType)
+    {
+        switch (tileType)
+        {
+            case TileType.Solid:
+            case TileType.Grass:
+            case TileType.Stone:
+            case TileType.Copper:
+            case TileType.Coal:
+            case TileType.Iron:
+            case TileType.Gold:
+                return true;
+
+            default:
+                return false;
+        }
     }
 
     public bool RegisterFootprint(
@@ -697,6 +969,20 @@ public class GridManager : Singleton<GridManager>, IGridService
         Occupancy.Clear();
     }
 
+    private void InitializeRegions()
+    {
+        Regions.RegionMarkedDirty -= HandleRegionMarkedDirty;
+        Regions.Initialize(width, height, Mathf.Max(8, regionSize));
+        Regions.RegionMarkedDirty += HandleRegionMarkedDirty;
+    }
+
+    private void HandleRegionMarkedDirty(
+        WorldRegionState region,
+        WorldRegionDirtyFlags addedFlags)
+    {
+        OnRegionDirty?.Invoke(region, addedFlags);
+    }
+
     private void HandleOccupancyChanged(
         GridOccupancyRecord record,
         GridOccupancyChangeType changeType)
@@ -713,6 +999,11 @@ public class GridManager : Singleton<GridManager>, IGridService
         // OnTileChanged quando a ocupação física muda.
         foreach (Vector2Int cell in record.Cells)
         {
+            MarkRegionDirty(
+                cell.x,
+                cell.y,
+                WorldRegionDirtyFlags.Navigation
+                | WorldRegionDirtyFlags.Visual);
             OnTileChanged?.Invoke(
                 cell.x,
                 cell.y,

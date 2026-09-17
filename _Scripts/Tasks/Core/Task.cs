@@ -5,7 +5,8 @@ public enum TaskType
     Dig,
     BuildTile,
     HaulResource,
-    Dismantle
+    Dismantle,
+    Harvest
 }
 
 public enum GroundHaulPhase
@@ -23,6 +24,7 @@ public class Task
     public bool isAssigned;
     public ResourceItem targetItem;
     public ConstructionBlueprint targetBlueprint;
+    public FloraEntity targetFlora;
     public GridLayer targetLayer;
     public int priority;
     public GroundHaulPhase groundHaulPhase { get; private set; }
@@ -34,7 +36,8 @@ public class Task
         TileType buildTileType = TileType.Ladder,
         ResourceItem item = null,
         int priority = 5,
-        GridLayer targetLayer = GridLayer.Terrain)
+        GridLayer targetLayer = GridLayer.Terrain,
+        FloraEntity flora = null)
     {
         this.gridPosition = gridPosition;
         this.visualGridPosition = gridPosition;
@@ -42,6 +45,7 @@ public class Task
         this.buildTileType = buildTileType;
         this.isAssigned = false;
         this.targetItem = item;
+        this.targetFlora = flora;
         this.targetLayer = targetLayer;
         this.priority = Mathf.Clamp(priority, 1, 9);
         this.groundHaulPhase = GroundHaulPhase.AwaitingPickup;

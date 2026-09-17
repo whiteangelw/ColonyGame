@@ -26,6 +26,7 @@ public struct FoodOption
     public int availablePortions;
     public float hungerRestoredPerPortion;
     public bool isRawFood;
+    public bool allowPreventiveConsumption;
     public int quality;
 
     public bool IsValid => availablePortions > 0
