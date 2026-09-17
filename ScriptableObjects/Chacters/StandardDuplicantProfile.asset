@@ -1,0 +1,24 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 55fd59bb0a0db8f4d91ea43a016a1e5b, type: 3}
+  m_Name: StandardDuplicantProfile
+  m_EditorClassIdentifier: Assembly-CSharp::DuplicantCapabilityProfile
+  maxStepUp: 2
+  maxJumpGap: 2
+  maxDropHeight: 3
+  buildAndDigRange: 4
+  baseWalkCost: 1
+  stepUpCostMultiplier: 1.5
+  jumpCostMultiplier: 2
+  ladderCostMultiplier: 0.8
+  canUseLadders: 1
+  canClimbWalls: 1

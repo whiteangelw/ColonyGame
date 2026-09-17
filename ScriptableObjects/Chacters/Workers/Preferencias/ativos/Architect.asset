@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 289e7e0af7518824c8adc8f400c4bcf4, type: 3}
+  m_Name: Architect
+  m_EditorClassIdentifier: Assembly-CSharp::DuplicantWorkProfile
+  taskAffinities:
+  - taskType: 0
+    preference: 2
+  - taskType: 1
+    preference: -2
+  - taskType: 2
+    preference: -2
+  - taskType: 3
+    preference: -2
+  - taskType: 4
+    preference: -2

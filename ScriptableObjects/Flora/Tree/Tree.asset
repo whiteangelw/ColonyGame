@@ -1,0 +1,23 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 24ed67f851858e34ea07a4baece9bfb1, type: 3}
+  m_Name: Tree
+  m_EditorClassIdentifier: Assembly-CSharp::FloraDefinitionSO
+  floraId: tree_1
+  prefab: {fileID: 4780434945349647146, guid: 3b53ec2bd405c704c93f3275e343270b, type: 3}
+  providesFood: 1
+  foodResourceType: 6
+  initialPortions: 1
+  hungerRestoredPerPortion: 35
+  isRawFood: 1
+  foodQuality: 0
+  harvestUnitsPerAction: 3

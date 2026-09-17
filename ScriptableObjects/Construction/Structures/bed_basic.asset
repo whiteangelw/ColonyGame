@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e2a9e5300de6ada4cb5689dfde0a56fc, type: 3}
+  m_Name: bed_basic
+  m_EditorClassIdentifier: Assembly-CSharp::BuildDefinitionSO
+  definitionId: bed_basic
+  displayName: Bed
+  description: 
+  icon: {fileID: -4918567252097486223, guid: 47ab0191f7a144a438a46f185dc0d870, type: 3}
+  tileAsset: {fileID: 11400000, guid: 31f454e70eeeb72498b17252c0f88423, type: 2}
+  menuSortOrder: 1
+  prefab: {fileID: 8133982083237187658, guid: 88377fc456be111468af4eb5b6939f69, type: 3}
+  requiresPhysicalPrefab: 1
+  requiresTileAsset: 0
+  canBeDismantled: 1
+  tileType: 12
+  placementLayer: 2
+  category: 2
+  requiredResource: 0
+  cost: 2
+  refundRate: 1
+  workTime: 3
+  footprint:
+    tileType: 12
+    width: 2
+    height: 1
+    originOffset: {x: 0, y: 0}
+    blocksMovement: 0
+    supportsWeight: 0
+    supportRule: 2

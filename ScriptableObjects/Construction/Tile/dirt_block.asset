@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e2a9e5300de6ada4cb5689dfde0a56fc, type: 3}
+  m_Name: dirt_block
+  m_EditorClassIdentifier: Assembly-CSharp::BuildDefinitionSO
+  definitionId: dirt_block1
+  displayName: Dirt
+  description: 
+  icon: {fileID: 1935456635180737115, guid: 789057b53aa36974a9c680dbdf377e17, type: 3}
+  tileAsset: {fileID: 11400000, guid: 15a1fec712e377a479f7964098eba2f6, type: 2}
+  menuSortOrder: 3
+  prefab: {fileID: 0}
+  requiresPhysicalPrefab: 0
+  requiresTileAsset: 0
+  canBeDismantled: 1
+  tileType: 1
+  placementLayer: 0
+  category: 0
+  requiredResource: 0
+  cost: 1
+  refundRate: 1
+  workTime: 1
+  footprint:
+    tileType: 1
+    width: 1
+    height: 1
+    originOffset: {x: 0, y: 0}
+    blocksMovement: 1
+    supportsWeight: 1
+    supportRule: 0

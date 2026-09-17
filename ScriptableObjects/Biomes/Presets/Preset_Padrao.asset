@@ -1,0 +1,20 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c3f4d2ddfec0f374a98c2e811b8f767a, type: 3}
+  m_Name: Preset_Padrao
+  m_EditorClassIdentifier: Assembly-CSharp::WorldPreset
+  presetName: "Mundo Padr\xE3o"
+  biomeLayers:
+  - biome: {fileID: 11400000, guid: 19067d13e81cfa640b44d187321f470f, type: 2}
+    startDepth: 0
+  - biome: {fileID: 11400000, guid: 63690c7c998b32049b6b61c819a76707, type: 2}
+    startDepth: 15

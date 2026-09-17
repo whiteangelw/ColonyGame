@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e2a9e5300de6ada4cb5689dfde0a56fc, type: 3}
+  m_Name: chest_1
+  m_EditorClassIdentifier: Assembly-CSharp::BuildDefinitionSO
+  definitionId: chest_1
+  displayName: Chest
+  description: 
+  icon: {fileID: -964047015465468455, guid: 1bcd3a72efeedec48ae95bab5fb17bc1, type: 3}
+  tileAsset: {fileID: 0}
+  menuSortOrder: 0
+  prefab: {fileID: 1995635115765134902, guid: 851afaacfe4b51142868bfd168cbecef, type: 3}
+  requiresPhysicalPrefab: 1
+  requiresTileAsset: 0
+  canBeDismantled: 1
+  tileType: 9
+  placementLayer: 2
+  category: 1
+  requiredResource: 2
+  cost: 2
+  refundRate: 1
+  workTime: 3
+  footprint:
+    tileType: 9
+    width: 1
+    height: 1
+    originOffset: {x: 0, y: 0}
+    blocksMovement: 0
+    supportsWeight: 0
+    supportRule: 2

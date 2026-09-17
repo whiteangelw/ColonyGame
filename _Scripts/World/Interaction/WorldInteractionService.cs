@@ -117,8 +117,17 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
 
         if (layer == GridLayer.Structure)
         {
-            return GridManager.Instance.GetOccupantAt(position, layer)
-                is IDismantlable;
+            UnityEngine.Object occupant =
+                GridManager.Instance.GetOccupantAt(position, layer);
+            if (!(occupant is IDismantlable)) return false;
+
+            string id = GridManager.Instance.GetContentId(
+                position.x,
+                position.y,
+                GridLayer.Structure);
+            BuildDefinitionSO definition =
+                BuildCatalogService.Instance?.GetById(id);
+            return definition == null || definition.CanBeDismantled;
         }
 
         TileType tileType = GridManager.Instance.GetTileType(
@@ -174,6 +183,14 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
         {
             StructureManager.Instance?.DismantleStructureAt(
                 printingPod.GridPosition);
+            return;
+        }
+
+        if (layer == GridLayer.Structure
+            && occupant is ConfiguredStructure configured)
+        {
+            StructureManager.Instance?.DismantleStructureAt(
+                configured.GridPosition);
             return;
         }
 

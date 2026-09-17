@@ -40,6 +40,9 @@ public class BoxSelectionHandler : MonoBehaviour
 
     private void HandleDragSelection()
     {
+        bool isTextEditing = InputContextService.Instance != null
+            && InputContextService.Instance.IsTextEditing;
+
         Vector3 mouseScreenPos = Mouse.current.position.ReadValue();
         Vector3 mouseWorldPos = mainCamera.ScreenToWorldPoint(mouseScreenPos);
         mouseWorldPos.z = 0;
@@ -50,6 +53,12 @@ public class BoxSelectionHandler : MonoBehaviour
         {
             bool pointerIsOverUI = EventSystem.current != null
                 && EventSystem.current.IsPointerOverGameObject();
+
+            if (isTextEditing && pointerIsOverUI)
+            {
+                isDraggingLeft = false;
+                return;
+            }
 
             // Cancelar e desmontar pertencem à ferramenta, não à UI da estrutura.
             if (playerInput.currentMode == InputMode.Cancel
@@ -81,11 +90,25 @@ public class BoxSelectionHandler : MonoBehaviour
                 }
             }
 
+            foreach (Collider2D pointHit in pointHits)
+            {
+                if (TryInteractWithHierarchy(pointHit)) return;
+            }
+
             // Fallback determinístico pelo grid, inclusive para footprints maiores.
             StorageStructure storageByGrid = StructureManager.Instance?.GetStorageAt(currentGridPos);
             if (storageByGrid != null)
             {
                 storageByGrid.OnInteract();
+                return;
+            }
+
+            ConfiguredStructure configuredByGrid =
+                StructureManager.Instance?.GetConfiguredStructureAt(
+                    currentGridPos);
+            if (configuredByGrid != null)
+            {
+                configuredByGrid.OnInteract();
                 return;
             }
 
@@ -142,6 +165,24 @@ public class BoxSelectionHandler : MonoBehaviour
         }
     }
 
+    private static bool TryInteractWithHierarchy(Component hitComponent)
+    {
+        if (hitComponent == null) return false;
+
+        MonoBehaviour[] behaviours =
+            hitComponent.GetComponentsInParent<MonoBehaviour>(true);
+        foreach (MonoBehaviour behaviour in behaviours)
+        {
+            if (behaviour is IInteractable interactable)
+            {
+                interactable.OnInteract();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private void CollectItemsInBox()
     {
         if (GridManager.Instance == null) return;
@@ -192,6 +233,19 @@ public class BoxSelectionHandler : MonoBehaviour
         {
             for (int y = minY; y <= maxY; y++)
             {
+                Vector2Int position = new Vector2Int(x, y);
+
+                if (playerInput.currentMode == InputMode.Harvest)
+                {
+                    FloraEntity flora = FloraManager.Instance?.GetFloraAt(
+                        position);
+                    if (flora != null)
+                    {
+                        TaskManager.Instance?.AddHarvestTask(flora);
+                    }
+                    continue;
+                }
+
                 Tile tile = GridManager.Instance.GetTile(x, y);
                 if (tile == null) continue;
 
@@ -201,12 +255,12 @@ public class BoxSelectionHandler : MonoBehaviour
                         tile.type != TileType.Chest && tile.type != TileType.Ladder &&
                         tile.type != TileType.PrintingPod)
                     {
-                        TaskManager.Instance?.AddTask(new Vector2Int(x, y), TaskType.Dig);
+                        TaskManager.Instance?.AddTask(position, TaskType.Dig);
                     }
                 }
                 else if (playerInput.currentMode == InputMode.Dismantle)
                 {
-                    QueueNextDismantleLayer(new Vector2Int(x, y));
+                    QueueNextDismantleLayer(position);
                 }
             }
         }
@@ -285,13 +339,6 @@ public class BoxSelectionHandler : MonoBehaviour
             return;
         }
 
-        ResourceType reqResource = definition != null
-            ? definition.RequiredResource
-            : BuildingCosts.GetRequiredResource(buildTile);
-        int costPerTile = definition != null
-            ? definition.Cost
-            : BuildingCosts.GetCost(buildTile);
-
         int validTilesCount = 0;
         for (int x = minX; x <= maxX; x++)
         {
@@ -299,7 +346,7 @@ public class BoxSelectionHandler : MonoBehaviour
             {
                 Vector2Int position = new Vector2Int(x, y);
                 if (BlueprintManager.Instance != null
-                    && BlueprintManager.Instance.CanCreateBlueprint(
+                    && BlueprintManager.Instance.CanPlanBuildHere(
                         position,
                         definitionId,
                         buildTile,
@@ -313,17 +360,6 @@ public class BoxSelectionHandler : MonoBehaviour
 
         if (validTilesCount == 0) return;
 
-        int totalCost = validTilesCount * costPerTile;
-        bool hasEnoughResources = StockpileManager.Instance == null || StockpileManager.Instance.HasResource(reqResource, totalCost);
-
-        if (!hasEnoughResources)
-        {
-            float cs = GridManager.Instance.cellSize;
-            Vector3 centerPos = new Vector3(((minX + maxX + 1) * cs) / 2f, ((minY + maxY + 1) * cs) / 2f, 0);
-            FloatingTextManager.Instance?.ShowText("Sem Recursos Suficientes no Mundo!", centerPos, Color.red);
-            return;
-        }
-
         // Instancia a entidade de Blueprint para cada tile selecionado
         for (int x = minX; x <= maxX; x++)
         {
@@ -332,7 +368,7 @@ public class BoxSelectionHandler : MonoBehaviour
                 Vector2Int pos = new Vector2Int(x, y);
 
                 if (BlueprintManager.Instance != null
-                    && BlueprintManager.Instance.CanCreateBlueprint(
+                    && BlueprintManager.Instance.CanPlanBuildHere(
                         pos,
                         definitionId,
                         buildTile,
@@ -382,34 +418,12 @@ public class BoxSelectionHandler : MonoBehaviour
             return;
         }
 
-        BuildDefinitionSO definition =
-            BuildCatalogService.Instance?.GetById(definitionId);
-        ResourceType resource = definition != null
-            ? definition.RequiredResource
-            : BuildingCosts.GetRequiredResource(buildTile);
-        int cost = definition != null
-            ? definition.Cost
-            : BuildingCosts.GetCost(buildTile);
-
-        if (StockpileManager.Instance != null
-            && !StockpileManager.Instance.HasResource(resource, cost))
-        {
-            ShowMachinePlacementMessage(
-                $"Sem recursos suficientes! Necessário: {cost} {resource}.",
-                minX,
-                maxX,
-                minY,
-                maxY
-            );
-            return;
-        }
-
         for (int x = minX; x <= maxX; x++)
         {
             for (int y = minY; y <= maxY; y++)
             {
                 Vector2Int position = new Vector2Int(x, y);
-                if (!BlueprintManager.Instance.CanCreateBlueprint(
+                if (!BlueprintManager.Instance.CanPlanBuildHere(
                         position,
                         definitionId,
                         buildTile,
@@ -443,7 +457,7 @@ public class BoxSelectionHandler : MonoBehaviour
         }
 
         Vector2Int selectedPosition = new Vector2Int(minX, minY);
-        BlueprintManager.Instance.CanCreateBlueprint(
+        BlueprintManager.Instance.CanPlanBuildHere(
             selectedPosition,
             definitionId,
             buildTile,

@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e2a9e5300de6ada4cb5689dfde0a56fc, type: 3}
+  m_Name: Printpod1
+  m_EditorClassIdentifier: Assembly-CSharp::BuildDefinitionSO
+  definitionId: printpod_1
+  displayName: Printpod
+  description: 
+  icon: {fileID: -3350135533084158560, guid: 73df8a0e5c8e88644bfb4bc0a5de15a8, type: 3}
+  tileAsset: {fileID: 0}
+  menuSortOrder: 5
+  prefab: {fileID: 7778097004519286146, guid: f5d7b69ebbab5e74bb08f01eecec0fce, type: 3}
+  requiresPhysicalPrefab: 1
+  requiresTileAsset: 0
+  canBeDismantled: 1
+  tileType: 11
+  placementLayer: 2
+  category: 2
+  requiredResource: 2
+  cost: 5
+  refundRate: 1
+  workTime: 1
+  footprint:
+    tileType: 11
+    width: 3
+    height: 3
+    originOffset: {x: -1, y: 0}
+    blocksMovement: 0
+    supportsWeight: 0
+    supportRule: 2

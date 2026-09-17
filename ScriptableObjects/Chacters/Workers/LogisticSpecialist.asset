@@ -1,0 +1,20 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a7e47e1c29b4a9d48908584f210b25ae, type: 3}
+  m_Name: LogisticSpecialist
+  m_EditorClassIdentifier: Assembly-CSharp::DuplicantDefinition
+  displayName: LogisticSpecialist
+  selectionWeight: 1
+  prefab: {fileID: 6932896531863596456, guid: b7606a2725254b0439c02b70cd371c15, type: 3}
+  workProfile: {fileID: 11400000, guid: 626f8b7c4ec93194c83b18d8ea4b10bb, type: 2}
+  capabilityProfile: {fileID: 11400000, guid: ae89a5582e400f54a8dbc1d2c134244c, type: 2}
+  lifeProfile: {fileID: 11400000, guid: ba7f7efae89b74245b2b7e3678047368, type: 2}

@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 16bd89279d7a29549a6e3fb781277c62, type: 3}
+  m_Name: LifeCycleSystem
+  m_EditorClassIdentifier: Assembly-CSharp::LifeCycleSettingsSO
+  tickInterval: 1
+  maximumDuplicantsPerFrame: 5
+  initialEnergyPercent: 1
+  initialHungerPercent: 1
+  hungerDrain: 0.08
+  idleEnergyDrain: 0.03
+  movingEnergyDrain: 0.08
+  workingEnergyDrain: 0.14
+  hungryThreshold: 0.35
+  starvingThreshold: 0.1
+  tiredThreshold: 0.3
+  exhaustedThreshold: 0.1
+  emergencyNapDuration: 10
+  emergencyNapRecoveryPercent: 0.2

@@ -55,6 +55,28 @@ public class BlueprintManager : Singleton<BlueprintManager>
             return false;
         }
 
+        return CanPlanBuildHere(
+            gridPos,
+            definitionId,
+            buildTile,
+            layer,
+            out failureReason);
+    }
+
+    public bool CanBuildNow(
+        Vector2Int gridPos,
+        string definitionId,
+        TileType buildTile,
+        GridLayer layer,
+        out string failureReason,
+        UnityEngine.Object ignoredOwner = null)
+    {
+        if (GridManager.Instance == null)
+        {
+            failureReason = "GridManager não encontrado.";
+            return false;
+        }
+
         BuildDefinitionSO definition =
             BuildCatalogService.Instance?.GetById(definitionId);
         StructureFootprintDefinition footprint = definition != null
@@ -62,6 +84,41 @@ public class BlueprintManager : Singleton<BlueprintManager>
             : StructureFootprintSettings.Resolve(buildTile);
 
         return GridManager.Instance.CanPlaceFootprint(
+            gridPos,
+            footprint,
+            layer,
+            out failureReason,
+            ignoredOwner);
+    }
+
+    public bool CanPlanBuildHere(
+        Vector2Int gridPos,
+        string definitionId,
+        TileType buildTile,
+        GridLayer layer,
+        out string failureReason)
+    {
+        if (!CanCreateBlueprint(buildTile))
+        {
+            failureReason = buildTile == TileType.PrintingPod
+                ? "Já existe um Printing Pod ou um projeto dele."
+                : "Esta construção não pode ser planejada agora.";
+            return false;
+        }
+
+        if (GridManager.Instance == null)
+        {
+            failureReason = "GridManager não encontrado.";
+            return false;
+        }
+
+        BuildDefinitionSO definition =
+            BuildCatalogService.Instance?.GetById(definitionId);
+        StructureFootprintDefinition footprint = definition != null
+            ? definition.GetFootprint()
+            : StructureFootprintSettings.Resolve(buildTile);
+
+        return GridManager.Instance.CanPlanFootprint(
             gridPos,
             footprint,
             layer,
@@ -175,7 +232,7 @@ public class BlueprintManager : Singleton<BlueprintManager>
             return null;
         }
 
-        if (!CanCreateBlueprint(
+        if (!CanPlanBuildHere(
                 gridPos,
                 definitionId,
                 buildTile,

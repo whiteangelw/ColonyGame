@@ -3,9 +3,10 @@ using UnityEngine;
 
 public enum BlueprintState
 {
-    WaitingMaterials,
-    ReadyToBuild,
-    Completed
+    WaitingMaterials = 0,
+    ReadyToBuild = 1,
+    Completed = 2,
+    WaitingForClearance = 3
 }
 
 public class ConstructionBlueprint : MonoBehaviour
@@ -31,14 +32,43 @@ public class ConstructionBlueprint : MonoBehaviour
     private Task currentTask;
     private bool applicationIsQuitting;
     private bool footprintReserved;
+    private GridManager subscribedGrid;
 
     public StructureFootprintDefinition Footprint { get; private set; }
 
     private void Start()
     {
+        SubscribeToGrid();
         // Garante a criação da tarefa caso o blueprint tenha sido
         // inicializado antes do TaskManager durante o carregamento da cena.
         CheckTaskState();
+    }
+
+    private void SubscribeToGrid()
+    {
+        if (subscribedGrid == GridManager.Instance)
+        {
+            return;
+        }
+
+        if (subscribedGrid != null)
+        {
+            subscribedGrid.OnTileChanged -= HandleTileChanged;
+        }
+
+        subscribedGrid = GridManager.Instance;
+        if (subscribedGrid != null)
+        {
+            subscribedGrid.OnTileChanged += HandleTileChanged;
+        }
+    }
+
+    private void HandleTileChanged(int x, int y, TileType tileType)
+    {
+        if (ContainsFootprintCell(new Vector2Int(x, y)))
+        {
+            CheckTaskState();
+        }
     }
 
     public void Initialize(
@@ -107,9 +137,11 @@ public class ConstructionBlueprint : MonoBehaviour
         );
         currentTask = null;
 
-        CurrentState = deliveredAmount < requiredAmount
-            ? BlueprintState.WaitingMaterials
-            : BlueprintState.ReadyToBuild;
+        CurrentState = RequiresTerrainClearance()
+            ? BlueprintState.WaitingForClearance
+            : deliveredAmount < requiredAmount
+                ? BlueprintState.WaitingMaterials
+                : BlueprintState.ReadyToBuild;
     }
 
     public int GetRemainingNeededAmount()
@@ -210,6 +242,15 @@ public class ConstructionBlueprint : MonoBehaviour
 
         if (CurrentState == BlueprintState.Completed) return;
 
+        SubscribeToGrid();
+
+        if (RequiresTerrainClearance())
+        {
+            CurrentState = BlueprintState.WaitingForClearance;
+            EnsureClearanceTask();
+            return;
+        }
+
         if (deliveredAmount < requiredAmount)
         {
             CurrentState = BlueprintState.WaitingMaterials;
@@ -267,8 +308,122 @@ public class ConstructionBlueprint : MonoBehaviour
         }
     }
 
+    private void EnsureClearanceTask()
+    {
+        if (TaskManager.Instance == null
+            || !TryGetNextClearanceCell(out Vector2Int clearanceCell))
+        {
+            return;
+        }
+
+        bool hasCorrectTask = currentTask != null
+            && currentTask.type == TaskType.Dig
+            && currentTask.gridPosition == clearanceCell
+            && TaskManager.Instance.ContainsTask(currentTask);
+
+        if (hasCorrectTask)
+        {
+            return;
+        }
+
+        if (currentTask != null)
+        {
+            TaskManager.Instance.RemoveTask(currentTask);
+        }
+
+        int priority = PriorityManager.Instance != null
+            ? PriorityManager.Instance.GetCategoryPriority(TaskType.Dig)
+            : 5;
+        currentTask = new Task(
+            clearanceCell,
+            TaskType.Dig,
+            targetTileType,
+            null,
+            priority)
+        {
+            targetBlueprint = this
+        };
+        TaskManager.Instance.AddTask(currentTask);
+    }
+
+    private bool RequiresTerrainClearance()
+    {
+        if (GridManager.Instance == null
+            || (buildLayer != GridLayer.Terrain
+                && buildLayer != GridLayer.Structure))
+        {
+            return false;
+        }
+
+        StructureFootprintDefinition footprint = Footprint
+            ?? StructureFootprintSettings.Resolve(targetTileType);
+        Vector2Int minimum = footprint.GetMinimumCell(gridPosition);
+
+        for (int localX = 0; localX < footprint.width; localX++)
+        {
+            for (int localY = 0; localY < footprint.height; localY++)
+            {
+                Tile tile = GridManager.Instance.GetTile(
+                    minimum + new Vector2Int(localX, localY));
+                if (tile != null && tile.type != TileType.Empty)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryGetNextClearanceCell(out Vector2Int clearanceCell)
+    {
+        clearanceCell = gridPosition;
+        if (GridManager.Instance == null)
+        {
+            return false;
+        }
+
+        StructureFootprintDefinition footprint = Footprint
+            ?? StructureFootprintSettings.Resolve(targetTileType);
+        Vector2Int minimum = footprint.GetMinimumCell(gridPosition);
+
+        for (int localX = 0; localX < footprint.width; localX++)
+        {
+            for (int localY = 0; localY < footprint.height; localY++)
+            {
+                Vector2Int cell = minimum + new Vector2Int(localX, localY);
+                Tile tile = GridManager.Instance.GetTile(cell);
+                if (tile != null
+                    && GridManager.Instance.IsTerrainRemovableForBuildPlan(
+                        tile.type))
+                {
+                    clearanceCell = cell;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private bool ContainsFootprintCell(Vector2Int cell)
+    {
+        StructureFootprintDefinition footprint = Footprint
+            ?? StructureFootprintSettings.Resolve(targetTileType);
+        Vector2Int minimum = footprint.GetMinimumCell(gridPosition);
+        return cell.x >= minimum.x
+            && cell.x < minimum.x + footprint.width
+            && cell.y >= minimum.y
+            && cell.y < minimum.y + footprint.height;
+    }
+
     private void OnDestroy()
     {
+        if (subscribedGrid != null)
+        {
+            subscribedGrid.OnTileChanged -= HandleTileChanged;
+        }
+
         BlueprintManager.Instance?.UnregisterBlueprint(this);
         if (Application.isPlaying && !applicationIsQuitting
             && !SaveGameRuntime.IsLoading)

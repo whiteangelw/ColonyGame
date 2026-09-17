@@ -1,0 +1,153 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 99d22ab08c6031e42b680f4cd967e04d, type: 3}
+  m_Name: NewIntent
+  m_EditorClassIdentifier: Assembly-CSharp::DuplicantIntentPhraseCatalogSO
+  minimumSecondsBetweenMessages: 10
+  worldOffset: {x: 0, y: 0.8, z: 0}
+  dig:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 0.85, g: 0.75, b: 0.45, a: 1}
+    phrases:
+    - Hora de ver o que este planeta escondeu de mim...
+    - "Se eu achar um f\xF3ssil, declaro que \xE9 meu."
+    - "Pelo menos o ch\xE3o n\xE3o reclama de nada."
+    - "Escavar \xE9 s\xF3 uma investiga\xE7\xE3o cient\xEDfica com mais sujeira."
+    - "Torcendo para isso n\xE3o desmoronar no meu p\xE9."
+  build:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 0.35, g: 0.8, b: 1, a: 1}
+    phrases:
+    - "Se sobrar parafuso no final, finjo que era pe\xE7a sobressalente."
+    - "Mais um passo para o nosso imp\xE9rio... ou pelo menos para n\xE3o tomar chuva."
+    - "O manual disse que era f\xE1cil. O manual claramente mentiu."
+    - "Engenharia de ponta em andamento, n\xE3o olhe muito de perto."
+    - Espero que a gravidade seja legal com essa estrutura hoje.
+  haul:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 1, g: 0.75, b: 0.25, a: 1}
+    phrases:
+    - "Leg day surpresa, n\xE3o estava no meu cronograma..."
+    - "Se isso cair, vou fingir que j\xE1 estava quebrado."
+    - Por que tudo que a gente precisa pesa uma tonelada?
+    - "Levando a civiliza\xE7\xE3o nas costas. Literalmente."
+    - "Transporte de carga de alta precis\xE3o... ops, quase deixei cair."
+  dismantle:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 1, g: 0.55, b: 0.25, a: 1}
+    phrases:
+    - "A parte divertida da engenharia: a destrui\xE7\xE3o controlada"
+    - "Se n\xE3o era para desmontar, por que colocaram parafusos?"
+    - Prometo que vou tentar reaproveitar metade disso.
+    - "Isso aqui j\xE1 teve dias melhores. Hoje n\xE3o \xE9 um deles."
+    - "Desconstruir \xE9 s\xF3 construir ao contr\xE1rio, certo?"
+  harvest:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 0.45, g: 1, b: 0.45, a: 1}
+    phrases:
+    - "Hora de colher os frutos do nosso suor... tomara que seja comest\xEDvel."
+    - "Se isso n\xE3o me der azia, considero uma vit\xF3ria."
+    - "A natureza trabalhou, agora eu fico com os cr\xE9ditos."
+    - "Olha s\xF3, a agricultura emp\xEDrica funcionou!"
+    - "Espero que n\xE3o tenha nenhum bicho morando nisso aqui."
+  seekFood:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 1, g: 0.8, b: 0.35, a: 1}
+    phrases:
+    - "Meu c\xE9rebro exige combust\xEDvel. Imediatamente."
+    - "Onde \xE9 que guardaram a comida boa?"
+    - "Ca\xE7ando qualquer coisa que passe de 100 calorias."
+    - "Se n\xE3o tiver sobremesa, vou fazer uma reclama\xE7\xE3o."
+    - "Rastreando o cheiro de algo vagamente comest\xEDvel..."
+  eat:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 0.55, g: 1, b: 0.45, a: 1}
+    phrases:
+    - "N\xE3o sei o que \xE9 isso, mas tem gosto de vit\xF3ria."
+    - "An\xE1lise sensorial inicial: crocante, estranho, mas aceit\xE1vel."
+    - "Mastiga, engole e n\xE3o pensa no que foi usado para fazer."
+    - "Comida de col\xF4nia: 2% tempero, 98% sobreviv\xEAncia."
+    - "Pronto, recarreguei as baterias biol\xF3gicas."
+  hungry:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 1, g: 0.75, b: 0.35, a: 1}
+    phrases:
+    - "Minha barriga est\xE1 fazendo mais barulho que o gerador."
+    - Daria minha melhor ferramenta por um lanche agora.
+    - "Minha capacidade de racioc\xEDnio caiu 40% por falta de glicose."
+    - "Se eu n\xE3o comer logo, vou come\xE7ar a roer as paredes."
+    - Foco sumindo... necessidade de carboidratos aumentando...
+  starving:
+    enabled: 1
+    bypassGlobalCooldown: 1
+    color: {r: 1, g: 0.3, b: 0.2, a: 1}
+    phrases:
+    - "VIS\xC3O FICANDO EMBA\xC7ADA. PRECISO DE CALORIAS."
+    - Se eu desmaiar, digam ao cozinheiro que a culpa foi dele.
+    - "Qualquer coisa serve! At\xE9 aquela ra\xE7\xE3o cinza!"
+    - "Meu corpo est\xE1 literalmente se devorando!"
+    - "Zero energia. Algu\xE9m me joga uma barra de prote\xEDna..."
+  seekBed:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 0, g: 1, b: 1, a: 1}
+    phrases:
+    - "Meu reino por um colch\xE3o que n\xE3o seja de palha."
+    - Hora de desligar a CPU por algumas horas.
+    - "Indo em dire\xE7\xE3o ao \xFAnico lugar confort\xE1vel deste lugar."
+    - "Se algu\xE9m me acordar sem um bom motivo, nem respondo por mim."
+    - "Onde fica mesmo o meu canto de hiberna\xE7\xE3o?"
+  sleep:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 0, g: 1, b: 1, a: 1}
+    phrases:
+    - Entrando em modo de espera...
+    - Que meus sonhos tenham menos trabalho e mais comida.
+    - Finalmente. O mundo pode se resolver sozinho por 8 horas.
+    - Apagando em 3... 2... 1...
+    - "Se o alarme tocar, vou fingir que sou uma est\xE1tua."
+  emergencyRest:
+    enabled: 1
+    bypassGlobalCooldown: 1
+    color: {r: 0.25, g: 0.9, b: 1, a: 1}
+    phrases:
+    - "O ch\xE3o parece estranhamente confort\xE1vel agora..."
+    - Sistema operacional desligando contra a minha vontade...
+    - Cheguei no meu limite absoluto. Boa noite, mundo.
+    - "N\xE3o \xE9 pregui\xE7a, \xE9 colapso biol\xF3gico."
+    - "P\xE9s n\xE3o respondem mais. Fico por aqui mesmo."
+  tired:
+    enabled: 1
+    bypassGlobalCooldown: 0
+    color: {r: 0.6, g: 0.85, b: 1, a: 1}
+    phrases:
+    - Sinto como se um dinossauro tivesse pisado em mim.
+    - "Minha barra de energia virou uma sugest\xE3o."
+    - "Preciso de um caf\xE9 de tr\xEAs litros ou de um milagre."
+    - "Trabalhar \xE9 legal, mas parar de trabalhar \xE9 muito melhor."
+    - "Acho que meus neur\xF4nios est\xE3o entrando em greve."
+  workFailed:
+    enabled: 1
+    bypassGlobalCooldown: 1
+    color: {r: 1, g: 0.45, b: 0.25, a: 1}
+    phrases:
+    - "N\xE3o consigo fazer isso agora."
+    - Preciso tentar outra coisa.

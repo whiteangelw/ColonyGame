@@ -1,0 +1,32 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9bb7c4a3ff1cb0f438995d5cd041e808, type: 3}
+  m_Name: Biome_Subterranio
+  m_EditorClassIdentifier: Assembly-CSharp::BiomeData
+  biomeName: "Subterr\xE2neo Profundo"
+  fillTile: 3
+  surfaceTile: 3
+  caveScale: 0.08
+  caveThreshold: 0.303
+  ores:
+  - name: Ferro
+    tileType: 6
+    threshold: 0
+    frequency: 0.2
+    minDepth: 20
+    maxDepth: 100
+  - name: Ouro
+    tileType: 7
+    threshold: 0
+    frequency: 0.2
+    minDepth: 20
+    maxDepth: 100

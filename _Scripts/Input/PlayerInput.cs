@@ -7,9 +7,11 @@ public enum InputMode
     Build,
     Dismantle,
     Haul,
+    Harvest,
     Cancel
 }
 
+[RequireComponent(typeof(InputContextService))]
 public class PlayerInput : MonoBehaviour
 {
     [Header("Modo e Seleção Atual")]
@@ -41,6 +43,17 @@ public class PlayerInput : MonoBehaviour
 
     private void HandleHotkeys()
     {
+        if (InputContextService.Instance != null
+            && !InputContextService.Instance.IsGameplayKeyboardAllowed)
+        {
+            return;
+        }
+
+        if (Keyboard.current == null)
+        {
+            return;
+        }
+
         // 1. Processa atalhos de Prioridade (1 a 9)
         int pressedPriority = GetPressedPriorityKey();
         if (pressedPriority != -1)
@@ -69,6 +82,12 @@ public class PlayerInput : MonoBehaviour
         if (Keyboard.current.zKey.wasPressedThisFrame)
         {
             SetInputMode(InputMode.Haul);
+            CloseBuildMenu();
+        }
+
+        if (Keyboard.current.hKey.wasPressedThisFrame)
+        {
+            SetInputMode(InputMode.Harvest);
             CloseBuildMenu();
         }
 
@@ -109,6 +128,9 @@ public class PlayerInput : MonoBehaviour
                 break;
             case InputMode.Haul:
                 PriorityManager.Instance.SetCategoryPriority(TaskType.HaulResource, priority);
+                break;
+            case InputMode.Harvest:
+                PriorityManager.Instance.SetCategoryPriority(TaskType.Harvest, priority);
                 break;
         }
     }

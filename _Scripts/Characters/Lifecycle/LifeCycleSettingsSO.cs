@@ -26,6 +26,16 @@ public class LifeCycleSettingsSO : ScriptableObject
     [Range(0f, 1f)] public float tiredThreshold = 0.30f;
     [Range(0f, 1f)] public float exhaustedThreshold = 0.10f;
 
+    [Header("Descanso em cama")]
+    [Range(0f, 1f)] public float seekBedBelowEnergyPercent = 0.30f;
+    [Range(0f, 1f)] public float wakeUpAtEnergyPercent = 0.85f;
+    [Min(0.01f)] public float bedEnergyRecoveryPerSecond = 8f;
+    [Min(0f)] public float minimumBedRestDuration = 2f;
+    [Min(1)] public int bedSearchRadius = 80;
+    [Min(1)] public int maximumBedPathChecks = 8;
+    [Min(0.1f)] public float bedSearchRetryDelay = 3f;
+    public bool enableBedRestDiagnostics = false;
+
     [Header("Soneca de emergência")]
     [Min(0.1f)] public float emergencyNapDuration = 5f;
     [Range(0.01f, 1f)] public float emergencyNapRecoveryPercent = 0.20f;
@@ -44,6 +54,15 @@ public class LifeCycleSettingsSO : ScriptableObject
     [Min(1f)] public float travelTimeSafetyMultiplier = 1.35f;
     [Min(0.1f)] public float foodEatingDurationPerPortion = 1.2f;
     [Min(0.1f)] public float foodSearchRetryDelay = 3f;
+
+    [Header("Preferência de fonte alimentar")]
+    [Tooltip("Menor pontuação significa maior preferência.")]
+    [Range(-100f, 100f)]
+    public float storageFoodScoreAdjustment = -10f;
+    [Range(-100f, 100f)]
+    public float groundFoodScoreAdjustment = 0f;
+    [Range(-100f, 100f)]
+    public float floraFoodScoreAdjustment = 12f;
 
     [Header("Efeito de alimento cru")]
     [Range(0f, 1f)] public float rawFoodDiscomfortChance = 1f;
