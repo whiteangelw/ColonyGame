@@ -32,6 +32,54 @@ public sealed class GridData
         return x >= 0 && x < Width && y >= 0 && y < Height;
     }
 
+    /// <summary>
+    /// Copia um resultado de geração para o estado mutável do runtime.
+    /// Não publica eventos e não executa regras de gameplay.
+    /// </summary>
+    public bool ApplyGenerationResult(WorldGenerationResult result)
+    {
+        if (result == null
+            || !IsCreated
+            || result.Width != Width
+            || result.Height != Height)
+        {
+            return false;
+        }
+
+        for (int x = 0; x < Width; x++)
+        {
+            for (int y = 0; y < Height; y++)
+            {
+                WorldCellData generated = result.GetCell(x, y);
+                Tile tile = tiles[x, y];
+
+                tile.type = generated.TerrainType;
+                tile.structureType = TileType.Empty;
+                tile.backWallType = TileType.Empty;
+                tile.decorationType = TileType.Empty;
+                tile.terrainContentId = string.Empty;
+                tile.structureContentId = string.Empty;
+                tile.backWallContentId = string.Empty;
+                tile.decorationContentId = string.Empty;
+                tile.isPassable = IsPassableTerrain(generated.TerrainType);
+                tile.fogState = generated.FogState;
+                tile.liquidAmount = Math.Max(0f, generated.LiquidAmount);
+                tile.reachabilityGroupID = -1;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsPassableTerrain(TileType type)
+    {
+        return type == TileType.Empty
+            || type == TileType.Ladder
+            || type == TileType.Chest
+            || type == TileType.PrintingPod
+            || type == TileType.Structure;
+    }
+
     public Tile GetTile(int x, int y)
     {
         return IsCreated && IsInside(x, y)
@@ -50,6 +98,9 @@ public sealed class GridData
 
         switch (layer)
         {
+            case GridLayer.Structure:
+                return tile.structureType;
+
             case GridLayer.BackWall:
                 return tile.backWallType;
 
@@ -57,7 +108,6 @@ public sealed class GridData
                 return tile.decorationType;
 
             default:
-                // Terrain e Structure ainda compartilham o campo físico atual.
                 return tile.type;
         }
     }
@@ -73,6 +123,10 @@ public sealed class GridData
 
         switch (layer)
         {
+            case GridLayer.Structure:
+                tile.structureType = type;
+                break;
+
             case GridLayer.BackWall:
                 tile.backWallType = type;
                 break;
@@ -125,16 +179,12 @@ public sealed class GridData
                 break;
             case GridLayer.Structure:
                 tile.structureContentId = normalizedId;
-                if (!string.IsNullOrEmpty(normalizedId))
-                    tile.terrainContentId = string.Empty;
                 break;
             case GridLayer.Decoration:
                 tile.decorationContentId = normalizedId;
                 break;
             default:
                 tile.terrainContentId = normalizedId;
-                if (!string.IsNullOrEmpty(normalizedId))
-                    tile.structureContentId = string.Empty;
                 break;
         }
 

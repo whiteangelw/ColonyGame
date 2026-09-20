@@ -10,15 +10,21 @@ public class RecipeUnlockService : MonoBehaviour
     [SerializeField] private bool startWithAllRecipesUnlocked = true;
 
     [Header("Definições liberadas no início")]
-    [Tooltip("Use os Definition Ids dos BuildDefinitionSO.")]
+    [Tooltip("Arraste os BuildDefinitionSO que devem existir desde o começo. Alterações aqui também valem para saves antigos.")]
+    [SerializeField] private List<BuildDefinitionSO> initiallyUnlockedDefinitions =
+        new List<BuildDefinitionSO>();
+
+    [Header("Compatibilidade legada — não preencher em conteúdo novo")]
+    [Tooltip("IDs antigos preservados para não quebrar cenas/prefabs já configurados.")]
     [SerializeField] private List<string> initiallyUnlockedDefinitionIds =
         new List<string>();
-
-    [Header("Compatibilidade legada")]
-    [Tooltip("Usado por cartas e saves antigos baseados em TileType.")]
+    [Tooltip("Usado somente por cartas e saves antigos baseados em TileType.")]
     [SerializeField] private List<TileType> initiallyUnlockedRecipes =
         new List<TileType>();
 
+    // Estes conjuntos guardam apenas progresso persistente. Os padrões do
+    // Inspector são consultados separadamente e, portanto, continuam valendo
+    // mesmo quando um save antigo é carregado.
     private readonly HashSet<string> unlockedDefinitionIds =
         new HashSet<string>(StringComparer.Ordinal);
     private readonly HashSet<TileType> unlockedLegacyRecipes =
@@ -26,17 +32,12 @@ public class RecipeUnlockService : MonoBehaviour
 
     private void Awake()
     {
-        if (Instance == null)
-        {
-            Instance = this;
-        }
+        if (Instance == null) Instance = this;
         else
         {
             Destroy(gameObject);
             return;
         }
-
-        ResetToConfiguredDefaults(false);
     }
 
     private void OnDestroy()
@@ -49,8 +50,9 @@ public class RecipeUnlockService : MonoBehaviour
         if (definition == null) return false;
 
         return startWithAllRecipesUnlocked
+            || IsConfiguredAsInitiallyUnlocked(definition)
             || IsDefinitionIdUnlocked(definition.DefinitionId)
-            || unlockedLegacyRecipes.Contains(definition.TileType);
+            || IsLegacyTileUnlocked(definition.TileType);
     }
 
     public bool IsUnlocked(string definitionId)
@@ -62,38 +64,47 @@ public class RecipeUnlockService : MonoBehaviour
 
         return definition != null
             ? IsUnlocked(definition)
-            : IsDefinitionIdUnlocked(definitionId);
+            : IsConfiguredId(definitionId) || IsDefinitionIdUnlocked(definitionId);
     }
 
-    // Mantido para cartas e receitas antigas.
+    // Mantido somente para conteúdo e saves antigos.
     public bool IsUnlocked(TileType tileType)
     {
-        return startWithAllRecipesUnlocked
-            || unlockedLegacyRecipes.Contains(tileType);
+        return startWithAllRecipesUnlocked || IsLegacyTileUnlocked(tileType);
+    }
+
+    public bool Unlock(BuildDefinitionSO definition)
+    {
+        if (definition == null) return false;
+        return Unlock(definition.DefinitionId);
     }
 
     public bool Unlock(string definitionId)
     {
         string normalizedId = NormalizeId(definitionId);
+        BuildDefinitionSO definition =
+            BuildCatalogService.Instance?.GetById(normalizedId);
+
         if (string.IsNullOrEmpty(normalizedId)
-            || BuildCatalogService.Instance?.GetById(normalizedId) == null
-            || IsUnlocked(normalizedId))
+            || definition == null
+            || IsUnlocked(definition))
         {
             return false;
         }
 
         unlockedDefinitionIds.Add(normalizedId);
         GameEvents.TriggerBuildDefinitionUnlocked(normalizedId);
+        GameEvents.TriggerRecipeUnlockStateChanged();
         return true;
     }
 
-    // Compatibilidade com cartas antigas baseadas em TileType.
     public bool Unlock(TileType tileType)
     {
         if (IsUnlocked(tileType)) return false;
 
         unlockedLegacyRecipes.Add(tileType);
         GameEvents.TriggerRecipeUnlocked(tileType);
+        GameEvents.TriggerRecipeUnlockStateChanged();
         return true;
     }
 
@@ -108,9 +119,7 @@ public class RecipeUnlockService : MonoBehaviour
     {
         List<int> result = new List<int>();
         foreach (TileType tileType in unlockedLegacyRecipes)
-        {
             result.Add((int)tileType);
-        }
 
         result.Sort();
         return result;
@@ -126,9 +135,7 @@ public class RecipeUnlockService : MonoBehaviour
         if (definitionIds != null)
         {
             foreach (string definitionId in definitionIds)
-            {
                 AddDefinitionIdWithoutNotification(definitionId);
-            }
         }
 
         if (legacyTileTypes != null)
@@ -136,9 +143,7 @@ public class RecipeUnlockService : MonoBehaviour
             foreach (int value in legacyTileTypes)
             {
                 if (Enum.IsDefined(typeof(TileType), value))
-                {
                     unlockedLegacyRecipes.Add((TileType)value);
-                }
             }
         }
 
@@ -147,20 +152,46 @@ public class RecipeUnlockService : MonoBehaviour
 
     public void ResetToConfiguredDefaults(bool notify = true)
     {
+        // Os padrões não precisam ser copiados para o save. Limpar os conjuntos
+        // significa voltar exatamente ao estado configurado no Inspector.
         unlockedDefinitionIds.Clear();
         unlockedLegacyRecipes.Clear();
-
-        foreach (string definitionId in initiallyUnlockedDefinitionIds)
-        {
-            AddDefinitionIdWithoutNotification(definitionId);
-        }
-
-        foreach (TileType tileType in initiallyUnlockedRecipes)
-        {
-            unlockedLegacyRecipes.Add(tileType);
-        }
-
         if (notify) GameEvents.TriggerRecipeUnlockStateChanged();
+    }
+
+    private bool IsConfiguredAsInitiallyUnlocked(BuildDefinitionSO definition)
+    {
+        for (int i = 0; i < initiallyUnlockedDefinitions.Count; i++)
+        {
+            if (initiallyUnlockedDefinitions[i] == definition) return true;
+        }
+
+        return IsConfiguredId(definition.DefinitionId);
+    }
+
+    private bool IsConfiguredId(string definitionId)
+    {
+        string normalizedId = NormalizeId(definitionId);
+        if (string.IsNullOrEmpty(normalizedId)) return false;
+
+        for (int i = 0; i < initiallyUnlockedDefinitionIds.Count; i++)
+        {
+            if (string.Equals(
+                NormalizeId(initiallyUnlockedDefinitionIds[i]),
+                normalizedId,
+                StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsLegacyTileUnlocked(TileType tileType)
+    {
+        return unlockedLegacyRecipes.Contains(tileType)
+            || initiallyUnlockedRecipes.Contains(tileType);
     }
 
     private bool IsDefinitionIdUnlocked(string definitionId)
@@ -174,13 +205,24 @@ public class RecipeUnlockService : MonoBehaviour
     {
         string normalizedId = NormalizeId(definitionId);
         if (!string.IsNullOrEmpty(normalizedId))
-        {
             unlockedDefinitionIds.Add(normalizedId);
-        }
     }
 
     private static string NormalizeId(string definitionId)
     {
         return definitionId?.Trim() ?? string.Empty;
     }
+
+#if UNITY_EDITOR
+    private void OnValidate()
+    {
+        HashSet<BuildDefinitionSO> seen = new HashSet<BuildDefinitionSO>();
+        for (int i = initiallyUnlockedDefinitions.Count - 1; i >= 0; i--)
+        {
+            BuildDefinitionSO definition = initiallyUnlockedDefinitions[i];
+            if (definition == null || !seen.Add(definition))
+                initiallyUnlockedDefinitions.RemoveAt(i);
+        }
+    }
+#endif
 }

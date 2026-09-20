@@ -9,6 +9,23 @@ public class HaulTaskHandler : ITaskHandler
     {
         if (task == null) return false;
 
+        IResourceDeliveryTarget deliveryTarget = task.targetResourceDelivery
+            ?? task.targetProductionMachine;
+        if (deliveryTarget != null)
+        {
+            if (!task.requestedResourceType.HasValue
+                || !deliveryTarget.NeedsInput(
+                    task.requestedResourceType.Value))
+            {
+                return false;
+            }
+
+            StockpileManager stockpile = StockpileManager.Instance;
+            return stockpile != null
+                && stockpile.GetAvailableAmount(
+                    task.requestedResourceType.Value) > 0;
+        }
+
         // Se for um blueprint precisando de entregas
         if (task.targetBlueprint != null)
         {

@@ -176,7 +176,11 @@ public class FoodSourceRegistry : MonoBehaviour
             foreach (FoodOption option in optionBuffer)
             {
                 if (!option.IsValid) continue;
-                if (option.isRawFood && !allowEmergencySources) continue;
+                if (!option.allowPreventiveConsumption
+                    && !allowEmergencySources)
+                {
+                    continue;
+                }
 
                 int portionsNeeded = Mathf.Max(
                     1,
@@ -205,7 +209,8 @@ public class FoodSourceRegistry : MonoBehaviour
                         option,
                         path.Count,
                         requestedPortions,
-                        waste)
+                        waste,
+                        settings)
                 });
             }
         }
@@ -330,14 +335,32 @@ public class FoodSourceRegistry : MonoBehaviour
         FoodOption option,
         int pathLength,
         int portions,
-        float waste)
+        float waste,
+        LifeCycleSettingsSO settings)
     {
         float score = pathLength;
         score += portions * 2f;
         score += waste * 0.05f;
         score += option.isRawFood ? 8f : 0f;
         score -= option.quality * 0.5f;
-        if (source.SourceKind == FoodSourceKind.Storage) score -= 2f;
+        switch (source.SourceKind)
+        {
+            case FoodSourceKind.Storage:
+                score += settings != null
+                    ? settings.storageFoodScoreAdjustment
+                    : -10f;
+                break;
+            case FoodSourceKind.GroundItem:
+                score += settings != null
+                    ? settings.groundFoodScoreAdjustment
+                    : 0f;
+                break;
+            case FoodSourceKind.Flora:
+                score += settings != null
+                    ? settings.floraFoodScoreAdjustment
+                    : 12f;
+                break;
+        }
         return score;
     }
 

@@ -1,30 +1,67 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Unity.Profiling;
 
 public class TaskManager : MonoBehaviour
 {
+    private readonly TaskValidationService taskValidator =
+    new TaskValidationService();
+    private readonly TaskFactory taskFactory =
+    new TaskFactory();
+    private static readonly ProfilerMarker SelectTaskMarker =
+        new ProfilerMarker("Colony.Tasks.SelectAndAssign");
+
     public static TaskManager Instance { get; private set; }
 
-    public event Action<Task> OnTaskAdded;
-    public event Action<Task> OnTaskRemoved;
+    public event Action<Task> OnTaskAdded
+    {
+        add => taskRegistry.TaskAdded += value;
+        remove => taskRegistry.TaskAdded -= value;
+    }
 
-    private readonly List<Task> pendingTasks = new List<Task>();
-    private readonly Dictionary<TaskType, ITaskHandler> handlers =
-        new Dictionary<TaskType, ITaskHandler>();
-    private readonly List<Task> taskCandidateBuffer = new List<Task>();
-    private readonly List<Task> batchCandidateBuffer = new List<Task>();
+    public event Action<Task> OnTaskRemoved
+    {
+        add => taskRegistry.TaskRemoved += value;
+        remove => taskRegistry.TaskRemoved -= value;
+    }
+
+    private readonly TaskRegistry taskRegistry =
+       new TaskRegistry();
+
+    private readonly TaskCancellationService taskCancellation =
+        new TaskCancellationService();
+
+    private List<Task> pendingTasks => taskRegistry.Tasks;
+
+    private readonly TaskHandlerRegistry handlerRegistry =
+        new TaskHandlerRegistry();
+
+    private readonly TaskSelectionService taskSelector =
+        new TaskSelectionService();
+
+    [SerializeField]
+    private bool enableBuildTaskDiagnostics;
+
+    [Header("Trabalho")]
+    [Tooltip("Durações base para tarefas que não possuem um alvo com definição própria.")]
+    [SerializeField] private TaskWorkSettingsSO workSettings;
+
+    private readonly TaskSelectionDiagnostics selectionDiagnostics =
+        new TaskSelectionDiagnostics();
 
     [Header("Orçamento de busca")]
-    [SerializeField, Min(1)] private int maximumTaskSearchesPerFrame = 2;
+    [SerializeField, Min(1)]
+    private int maximumTaskSearchesPerFrame = 2;
+    private readonly TaskSearchBudget taskSearchBudget =
+        new TaskSearchBudget();
+    private readonly TaskBatchSelectionService batchSelector =
+    new TaskBatchSelectionService();
 
-    private int taskSearchBudgetFrame = -1;
-    private int taskSearchesThisFrame;
-    private int lastInvalidTaskCleanupFrame = -1;
-    private bool isRemovingInvalidTasks;
-    private Vector2Int candidateSortOrigin;
-    private DuplicantWorkProfile candidateWorkProfile;
-    private GridManager subscribedGrid;
+    private readonly TaskCleanupService taskCleanup =
+        new TaskCleanupService();
+    private readonly TaskGridSubscription gridSubscription =
+       new TaskGridSubscription();
 
     [Header("Transporte em lote")]
     [SerializeField, Min(1)]
@@ -33,25 +70,22 @@ public class TaskManager : MonoBehaviour
     [SerializeField, Min(1)]
     private int maximumBatchPickupDistance = 12;
 
-    public int PendingTaskCount => pendingTasks.Count;
+    [Header("Entrega de blueprints em lote")]
+    [SerializeField, Min(1)]
+    private int maximumBlueprintDeliveriesPerRun = 12;
 
-    public int AssignedTaskCount
-    {
-        get
-        {
-            int count = 0;
+    [SerializeField, Min(1)]
+    private int maximumBlueprintDeliveryDistance = 32;
 
-            foreach (Task task in pendingTasks)
-            {
-                if (task != null && task.isAssigned)
-                {
-                    count++;
-                }
-            }
+    public int MaximumBlueprintDeliveriesPerRun =>
+        Mathf.Max(1, maximumBlueprintDeliveriesPerRun);
 
-            return count;
-        }
-    }
+    public int MaximumBlueprintDeliveryDistance =>
+        Mathf.Max(1, maximumBlueprintDeliveryDistance);
+
+    public int PendingTaskCount => taskRegistry.Count;
+
+    public int AssignedTaskCount => taskRegistry.AssignedCount;
 
     private void Awake()
     {
@@ -65,45 +99,42 @@ public class TaskManager : MonoBehaviour
             return;
         }
 
+        taskFactory.Configure(workSettings);
+
         RegisterHandler(new DigTaskHandler());
         RegisterHandler(new BuildTaskHandler());
         RegisterHandler(new HaulTaskHandler());
         RegisterHandler(new DismantleTaskHandler());
+        RegisterHandler(new HarvestTaskHandler());
+        RegisterHandler(new HarvestTaskHandler(TaskType.Chop));
+        RegisterHandler(new OperateMachineTaskHandler());
+
     }
 
     private void Start()
     {
-        TrySubscribeToGrid();
+        RefreshGridSubscription();
         RemoveInvalidTasks(true);
     }
 
     private void OnDestroy()
     {
-        if (subscribedGrid != null)
-        {
-            subscribedGrid.OnTileChanged -= HandleTileChanged;
-            subscribedGrid.OnGridRebuilt -= HandleGridRebuilt;
-        }
+        gridSubscription.Disconnect(
+            HandleTileChanged,
+            HandleGridRebuilt);
     }
 
-    private void TrySubscribeToGrid()
+    private void RefreshGridSubscription()
     {
-        if (subscribedGrid == GridManager.Instance) return;
-        if (subscribedGrid != null)
-        {
-            subscribedGrid.OnTileChanged -= HandleTileChanged;
-            subscribedGrid.OnGridRebuilt -= HandleGridRebuilt;
-        }
-
-        subscribedGrid = GridManager.Instance;
-        if (subscribedGrid != null)
-        {
-            subscribedGrid.OnTileChanged += HandleTileChanged;
-            subscribedGrid.OnGridRebuilt += HandleGridRebuilt;
-        }
+        gridSubscription.Refresh(
+            HandleTileChanged,
+            HandleGridRebuilt);
     }
 
-    private void HandleTileChanged(int x, int y, TileType type)
+    private void HandleTileChanged(
+        int x,
+        int y,
+        TileType type)
     {
         RemoveInvalidTasks(true);
     }
@@ -115,16 +146,12 @@ public class TaskManager : MonoBehaviour
 
     public void RegisterHandler(ITaskHandler handler)
     {
-        if (handler != null && !handlers.ContainsKey(handler.HandledType))
-        {
-            handlers.Add(handler.HandledType, handler);
-        }
+        handlerRegistry.Register(handler);
     }
 
     public ITaskHandler GetHandler(TaskType type)
     {
-        handlers.TryGetValue(type, out ITaskHandler handler);
-        return handler;
+        return handlerRegistry.Get(type);
     }
 
     public void AddTask(
@@ -136,109 +163,186 @@ public class TaskManager : MonoBehaviour
             ? GetTaskAt(gridPos, type, targetLayer) != null
             : GetTaskAt(gridPos) != null;
 
-        if (alreadyExists) return;
-
-        int categoryPriority = PriorityManager.Instance != null ? PriorityManager.Instance.GetCategoryPriority(type) : 5;
-        Task newTask = new Task(
-            gridPos,
-            type,
-            TileType.Empty,
-            null,
-            categoryPriority,
-            targetLayer);
-
-        pendingTasks.Add(newTask);
-        OnTaskAdded?.Invoke(newTask);
-    }
-
-    public void AddTask(Task task)
-    {
-        if (task == null) return;
-        if (pendingTasks.Exists(existing => IsSameTask(existing, task))) return;
-
-        pendingTasks.Add(task);
-        OnTaskAdded?.Invoke(task);
-    }
-
-    public void AddBuildTask(Vector2Int gridPos, TileType tileToBuild)
-    {
-        if (GetTaskAt(gridPos) != null) return;
-
-        int categoryPriority = PriorityManager.Instance != null ? PriorityManager.Instance.GetCategoryPriority(TaskType.BuildTile) : 5;
-        Task buildTask = new Task(gridPos, TaskType.BuildTile, tileToBuild, null, categoryPriority);
-        pendingTasks.Add(buildTask);
-        OnTaskAdded?.Invoke(buildTask);
-    }
-
-    public void AddHaulTask(ResourceItem item)
-    {
-        if (item == null || GridManager.Instance == null) return;
-
-        Vector2Int gridPos = GridManager.Instance.WorldToGridPosition(
-            item.transform.position
-        );
-
-        if (!item.IsReadyForHaul)
+        if (alreadyExists)
         {
             return;
         }
 
-        bool alreadyExists = pendingTasks.Exists(t => t.type == TaskType.HaulResource && t.targetItem == item);
+        Task newTask = taskFactory.CreateTask(
+            gridPos,
+            type,
+            targetLayer);
 
-        if (!alreadyExists)
+        taskRegistry.Add(newTask);
+    }
+
+    public void AddTask(Task task)
+    {
+        taskRegistry.Add(task);
+    }
+
+    public bool AddHarvestTask(
+        FloraEntity flora,
+        int priorityOverride = -1)
+    {
+        if (flora == null
+            || GetTaskAt(flora.GridPosition) != null)
         {
-            int categoryPriority = PriorityManager.Instance != null ? PriorityManager.Instance.GetCategoryPriority(TaskType.HaulResource) : 5;
-            Task haulTask = new Task(gridPos, TaskType.HaulResource, TileType.Empty, item, categoryPriority);
-            pendingTasks.Add(haulTask);
-            OnTaskAdded?.Invoke(haulTask);
+            return false;
         }
+
+        Task harvestTask = taskFactory.CreateHarvestTask(
+            flora,
+            priorityOverride);
+        if (harvestTask == null) return false;
+
+        taskRegistry.Add(harvestTask);
+        return true;
+    }
+
+    public void AddBuildTask(
+        Vector2Int gridPos,
+        TileType tileToBuild)
+    {
+        if (GetTaskAt(gridPos) != null)
+        {
+            return;
+        }
+
+        Task buildTask = taskFactory.CreateBuildTask(
+            gridPos,
+            tileToBuild);
+
+        taskRegistry.Add(buildTask);
+    }
+
+    public void AddHaulTask(ResourceItem item)
+    {
+        Task haulTask = taskFactory.CreateGroundHaulTask(item);
+
+        if (haulTask != null)
+        {
+            taskRegistry.Add(haulTask);
+        }
+    }
+
+    public void AddMachineSupplyTask(
+        ProductionMachineBehaviour machine,
+        ResourceType resourceType)
+    {
+        AddResourceDeliveryTask(machine, resourceType);
+    }
+
+    public void AddResourceDeliveryTask(
+        IResourceDeliveryTarget target,
+        ResourceType resourceType)
+    {
+        if (target == null || HasDeliveryTask(target, resourceType))
+        {
+            return;
+        }
+
+        Task task = new Task(
+            target.GridPosition,
+            TaskType.HaulResource,
+            TileType.Empty,
+            null,
+            PriorityManager.Instance != null
+                ? PriorityManager.Instance.GetCategoryPriority(TaskType.HaulResource)
+                : 5,
+            GridLayer.Structure);
+        task.targetResourceDelivery = target;
+        task.targetProductionMachine = target as ProductionMachineBehaviour;
+        task.requestedResourceType = resourceType;
+        taskRegistry.Add(task);
+    }
+
+    private bool HasDeliveryTask(
+        IResourceDeliveryTarget target,
+        ResourceType resourceType)
+    {
+        for (int i = 0; i < pendingTasks.Count; i++)
+        {
+            Task task = pendingTasks[i];
+            IResourceDeliveryTarget existing = task?.targetResourceDelivery
+                ?? task?.targetProductionMachine;
+            if (task != null
+                && ReferenceEquals(existing, target)
+                && task.type == TaskType.HaulResource
+                && task.requestedResourceType == resourceType)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public void AddMachineOperationTask(ProductionMachineBehaviour machine)
+    {
+        if (machine == null || HasMachineTask(machine, TaskType.OperateMachine, null))
+        {
+            return;
+        }
+
+        Task task = new Task(
+            machine.GridPosition,
+            TaskType.OperateMachine,
+            TileType.Empty,
+            null,
+            PriorityManager.Instance != null
+                ? PriorityManager.Instance.GetCategoryPriority(TaskType.OperateMachine)
+                : 5,
+            GridLayer.Structure);
+        task.targetProductionMachine = machine;
+        taskRegistry.Add(task);
+    }
+
+    private bool HasMachineTask(
+        ProductionMachineBehaviour machine,
+        TaskType type,
+        ResourceType? resourceType)
+    {
+        for (int i = 0; i < pendingTasks.Count; i++)
+        {
+            Task task = pendingTasks[i];
+            if (task != null
+                && task.targetProductionMachine == machine
+                && task.type == type
+                && task.requestedResourceType == resourceType)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public void RemoveTask(Task task)
     {
-        if (task != null && pendingTasks.Contains(task))
-        {
-            pendingTasks.Remove(task);
-            OnTaskRemoved?.Invoke(task);
-        }
+        taskRegistry.Remove(task);
     }
 
     public bool CancelTasksAt(Vector2Int position)
     {
-        bool cancelled = false;
-        List<Task> matches = pendingTasks.FindAll(task =>
-            task != null && task.gridPosition == position);
-
-        foreach (Task task in matches)
-        {
-            DuplicantController[] duplicants = FindObjectsByType<DuplicantController>(
-                FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-            foreach (DuplicantController duplicant in duplicants)
-            {
-                if (duplicant != null && duplicant.currentTask == task)
-                    duplicant.CancelCurrentTaskExecution(
-                        TaskInterruptionOrigin.ManualCancellation);
-            }
-            task.isAssigned = false;
-            RemoveTask(task);
-            cancelled = true;
-        }
-        return cancelled;
+        return taskCancellation.CancelTasksAt(
+            pendingTasks,
+            position,
+            RemoveTask);
     }
 
-    public int CancelTasksForBlueprint(ConstructionBlueprint blueprint)
+    public int CancelTasksForMachine(ProductionMachineBehaviour machine)
     {
-        if (blueprint == null) return 0;
+        if (machine == null) return 0;
+        List<Task> matches = pendingTasks.FindAll(
+            task => task != null && task.targetProductionMachine == machine);
 
-        List<Task> matches = pendingTasks.FindAll(task =>
-            task != null && task.targetBlueprint == blueprint);
-
-        foreach (Task task in matches)
+        for (int i = 0; i < matches.Count; i++)
         {
-            InterruptAssignedTask(
+            Task task = matches[i];
+            taskCancellation.InterruptAssignedTask(
                 task,
-                TaskInterruptionOrigin.BlueprintCancelled,
-                true);
+                TaskInterruptionOrigin.ManualCancellation);
             task.isAssigned = false;
             RemoveTask(task);
         }
@@ -246,48 +350,45 @@ public class TaskManager : MonoBehaviour
         return matches.Count;
     }
 
-    private static void InterruptAssignedTask(
-        Task task,
-        TaskInterruptionOrigin origin,
-        bool preserveCarriedInventory = false,
-        bool skipWorkerAlreadyExecuting = false)
+    public int CancelTasksForDeliveryTarget(IResourceDeliveryTarget target)
     {
-        if (task == null || !task.isAssigned) return;
+        if (target == null) return 0;
+        List<Task> matches = pendingTasks.FindAll(task =>
+            task != null
+            && ReferenceEquals(
+                task.targetResourceDelivery ?? task.targetProductionMachine,
+                target));
 
-        DuplicantController[] duplicants =
-            FindObjectsByType<DuplicantController>(
-                FindObjectsInactive.Exclude,
-                FindObjectsSortMode.None);
-
-        foreach (DuplicantController duplicant in duplicants)
+        for (int i = 0; i < matches.Count; i++)
         {
-            if (duplicant != null && duplicant.currentTask == task)
-            {
-                if (skipWorkerAlreadyExecuting
-                    && duplicant.currentState ==
-                        DuplicantController.WorkerState.Working)
-                {
-                    continue;
-                }
-
-                duplicant.CancelCurrentTaskExecution(
-                    origin,
-                    preserveCarriedInventory);
-            }
+            Task task = matches[i];
+            taskCancellation.InterruptAssignedTask(
+                task,
+                TaskInterruptionOrigin.ManualCancellation);
+            task.isAssigned = false;
+            RemoveTask(task);
         }
+
+        return matches.Count;
+    }
+
+    public int CancelTasksForBlueprint(
+       ConstructionBlueprint blueprint)
+    {
+        return taskCancellation.CancelTasksForBlueprint(
+            pendingTasks,
+            blueprint,
+            RemoveTask);
     }
 
     public void ReleaseTask(Task task)
     {
-        if (task != null && pendingTasks.Contains(task))
-        {
-            task.isAssigned = false;
-        }
+        taskRegistry.Release(task);
     }
 
     public Task GetTaskAt(Vector2Int gridPos)
     {
-        return pendingTasks.Find(t => t.gridPosition == gridPos);
+        return taskRegistry.GetAt(gridPos);
     }
 
     public Task GetTaskAt(
@@ -295,122 +396,113 @@ public class TaskManager : MonoBehaviour
         TaskType type,
         GridLayer targetLayer)
     {
-        return pendingTasks.Find(task =>
-            task != null
-            && task.gridPosition == gridPos
-            && task.type == type
-            && task.targetLayer == targetLayer);
+        return taskRegistry.GetAt(
+            gridPos,
+            type,
+            targetLayer);
     }
 
     public bool ContainsTask(Task task)
     {
-        return task != null && pendingTasks.Contains(task);
+        return taskRegistry.Contains(task);
     }
 
     public List<Task> GetTasksSnapshot()
     {
-        return new List<Task>(pendingTasks);
+        return taskRegistry.GetSnapshot();
     }
 
     public void ClearTasksForLoad()
     {
-        for (int i = pendingTasks.Count - 1; i >= 0; i--)
-        {
-            Task task = pendingTasks[i];
-            pendingTasks.RemoveAt(i);
+        taskRegistry.ClearForLoad();
 
-            if (task != null)
-            {
-                task.isAssigned = false;
-                OnTaskRemoved?.Invoke(task);
-            }
-        }
-
-        taskCandidateBuffer.Clear();
-        batchCandidateBuffer.Clear();
+        taskSelector.Clear();
+        batchSelector.Clear();
+        taskCleanup.Reset();
+        taskSearchBudget.Reset();
     }
 
     public bool TryAcquireTaskSearchSlot()
     {
-        if (taskSearchBudgetFrame != Time.frameCount)
-        {
-            taskSearchBudgetFrame = Time.frameCount;
-            taskSearchesThisFrame = 0;
-        }
-
-        if (taskSearchesThisFrame >= maximumTaskSearchesPerFrame)
-        {
-            return false;
-        }
-
-        taskSearchesThisFrame++;
-        return true;
+        return taskSearchBudget.TryAcquire(
+            maximumTaskSearchesPerFrame);
     }
 
     public Task GetNextTaskFor(
         Vector2Int dupeGridPos,
         out List<Vector2Int> calculatedPath,
         DuplicantCapabilityProfile profile = null,
-        DuplicantWorkProfile workProfile = null)
+        DuplicantWorkProfile workProfile = null,
+        Predicate<Task> isTaskTemporarilyDeferred = null)
+    {
+        using (SelectTaskMarker.Auto())
+        {
+            long startedAt = PerformanceMetricsService.BeginSample();
+
+            try
+            {
+                return GetNextTaskForCore(
+                    dupeGridPos,
+                    out calculatedPath,
+                    profile,
+                    workProfile,
+                    isTaskTemporarilyDeferred);
+            }
+            finally
+            {
+                PerformanceMetricsService.EndSample(
+                    PerformanceMetric.TaskSelection,
+                    startedAt);
+            }
+        }
+    }
+
+    private Task GetNextTaskForCore(
+        Vector2Int dupeGridPos,
+        out List<Vector2Int> calculatedPath,
+        DuplicantCapabilityProfile profile,
+        DuplicantWorkProfile workProfile,
+        Predicate<Task> isTaskTemporarilyDeferred)
     {
         RemoveInvalidTasks();
 
-        calculatedPath = null;
-        taskCandidateBuffer.Clear();
+        selectionDiagnostics.Enabled =
+            enableBuildTaskDiagnostics;
 
-        for (int i = 0; i < pendingTasks.Count; i++)
-        {
-            Task task = pendingTasks[i];
-            if (task == null || task.isAssigned) continue;
+        return taskSelector.TrySelect(
+            pendingTasks,
+            dupeGridPos,
+            profile,
+            workProfile,
+            handlerRegistry.Handlers,
+            selectionDiagnostics.LogRejection,
+            out calculatedPath,
+            isTaskTemporarilyDeferred);
+    }
 
-            RefreshDynamicTaskPosition(task);
-            taskCandidateBuffer.Add(task);
-        }
+    public bool TryAssignAdditionalBlueprintDeliveryTask(
+        Vector2Int workerPosition,
+        Vector2Int batchAnchor,
+        ResourceType resourceType,
+        DuplicantCapabilityProfile profile,
+        out Task selectedTask,
+        ISet<Task> excludedTasks = null,
+        int maximumDistanceOverride = -1)
+    {
+        RemoveInvalidTasks();
 
-        candidateSortOrigin = dupeGridPos;
-        candidateWorkProfile = workProfile;
-        taskCandidateBuffer.Sort(CompareByPriorityAndDistance);
-
-        foreach (Task task in taskCandidateBuffer)
-        {
-            if (ReachabilityManager.Instance != null
-                && ReachabilityManager.Instance.IsReady)
-            {
-                bool isGroundHaul = task.type == TaskType.HaulResource
-                    && task.targetBlueprint == null;
-
-                bool canReach = isGroundHaul
-                    ? ReachabilityManager.Instance.CanReachExact(
-                        dupeGridPos,
-                        task.gridPosition,
-                        profile
-                    )
-                    : ReachabilityManager.Instance.CanReach(
-                        dupeGridPos,
-                        task.gridPosition,
-                        profile
-                    );
-
-                if (!canReach) continue;
-            }
-
-            ITaskHandler handler = GetHandler(task.type);
-            if (handler == null || !handler.CanExecute(null, task)) continue;
-
-            List<Vector2Int> path = TaskNavigationUtility.GetPathToTask(
-                dupeGridPos,
-                task,
-                profile
-            );
-
-            if (path == null) continue;
-
-            task.isAssigned = true;
-            calculatedPath = path;
-            return task;
-        }
-
-        return null;
+        return batchSelector.TrySelectBlueprintDeliveryTask(
+            pendingTasks,
+            workerPosition,
+            batchAnchor,
+            resourceType,
+            profile,
+            maximumDistanceOverride > 0
+                ? maximumDistanceOverride
+                : MaximumBlueprintDeliveryDistance,
+            maximumBatchPathChecks,
+            out selectedTask,
+            excludedTasks);
     }
 
     public bool TryAssignAdditionalGroundHaulTask(
@@ -422,114 +514,62 @@ public class TaskManager : MonoBehaviour
     {
         RemoveInvalidTasks();
 
-        selectedTask = null;
-        calculatedPath = null;
-
-        batchCandidateBuffer.Clear();
-
-        foreach (Task task in pendingTasks)
-        {
-            if (task == null
-                || task.isAssigned
-                || task.type != TaskType.HaulResource
-                || task.targetBlueprint != null
-                || task.targetItem == null
-                || task.targetItem.type != resourceType
-                || !task.targetItem.IsReadyForHaul)
-            {
-                continue;
-            }
-
-            task.gridPosition = GridManager.Instance.WorldToGridPosition(
-                task.targetItem.transform.position
-            );
-
-            int maximumDistanceSquared =
-                maximumBatchPickupDistance * maximumBatchPickupDistance;
-
-            if (SquaredGridDistance(dupeGridPos, task.gridPosition)
-                > maximumDistanceSquared)
-            {
-                continue;
-            }
-
-            batchCandidateBuffer.Add(task);
-        }
-
-        candidateSortOrigin = dupeGridPos;
-        batchCandidateBuffer.Sort(CompareByDistance);
-
-        int checks = Mathf.Min(
+        return batchSelector.TrySelectGroundHaulTask(
+            pendingTasks,
+            dupeGridPos,
+            resourceType,
+            profile,
+            Mathf.Max(1, maximumBatchPickupDistance),
             maximumBatchPathChecks,
-            batchCandidateBuffer.Count
-        );
+            out selectedTask,
+            out calculatedPath);
+    }
 
-        for (int i = 0; i < checks; i++)
+    public bool TryAssignMachineSupplyTask(
+        Vector2Int workerPosition,
+        ResourceType resourceType,
+        DuplicantCapabilityProfile profile,
+        int maximumDistance,
+        out Task selectedTask)
+    {
+        RemoveInvalidTasks();
+        selectedTask = null;
+        int bestScore = int.MinValue;
+
+        for (int i = 0; i < pendingTasks.Count; i++)
         {
-            Task candidate = batchCandidateBuffer[i];
-
-            if (ReachabilityManager.Instance != null
-                && ReachabilityManager.Instance.IsReady
-                && !ReachabilityManager.Instance.CanReachExact(
-                    dupeGridPos,
-                    candidate.gridPosition,
-                    profile))
+            Task candidate = pendingTasks[i];
+            if (candidate == null
+                || candidate.isAssigned
+                || candidate.type != TaskType.HaulResource
+                || (candidate.targetResourceDelivery == null
+                    && candidate.targetProductionMachine == null)
+                || !candidate.requestedResourceType.HasValue
+                || candidate.requestedResourceType.Value != resourceType
+                || !IsTaskValid(candidate))
             {
                 continue;
             }
 
-            List<Vector2Int> path = PathfindingAStar.Instance?.FindPath(
-                dupeGridPos,
-                candidate.gridPosition,
-                profile
-            );
+            List<Vector2Int> path = TaskNavigationUtility.GetPathToTask(
+                workerPosition,
+                candidate,
+                profile);
+            if (path == null) continue;
 
-            if (path == null)
-            {
-                continue;
-            }
+            int distance = Mathf.Abs(workerPosition.x - candidate.gridPosition.x)
+                + Mathf.Abs(workerPosition.y - candidate.gridPosition.y);
+            if (distance > Mathf.Max(1, maximumDistance)) continue;
+            int score = candidate.priority * 1000 - Mathf.Min(distance, 99);
+            if (score <= bestScore) continue;
 
-            candidate.isAssigned = true;
+            bestScore = score;
             selectedTask = candidate;
-            calculatedPath = path;
-            return true;
         }
 
-        return false;
-    }
-
-    private static int SquaredGridDistance(Vector2Int a, Vector2Int b)
-    {
-        int deltaX = a.x - b.x;
-        int deltaY = a.y - b.y;
-        return deltaX * deltaX + deltaY * deltaY;
-    }
-
-    private int CompareByPriorityAndDistance(Task a, Task b)
-    {
-        int scoreComparison = GetTaskSelectionScore(
-            b,
-            candidateSortOrigin,
-            candidateWorkProfile
-        ).CompareTo(
-            GetTaskSelectionScore(
-                a,
-                candidateSortOrigin,
-                candidateWorkProfile
-            )
-        );
-
-        return scoreComparison != 0
-            ? scoreComparison
-            : CompareByDistance(a, b);
-    }
-
-    private int CompareByDistance(Task a, Task b)
-    {
-        return SquaredGridDistance(candidateSortOrigin, a.gridPosition)
-            .CompareTo(
-                SquaredGridDistance(candidateSortOrigin, b.gridPosition)
-            );
+        if (selectedTask == null) return false;
+        selectedTask.isAssigned = true;
+        return true;
     }
 
     public int GetTaskSelectionScore(
@@ -537,180 +577,47 @@ public class TaskManager : MonoBehaviour
         Vector2Int duplicantPosition,
         DuplicantWorkProfile workProfile = null)
     {
-        if (task == null)
-        {
-            return int.MinValue;
-        }
-
-        int globalPriorityScore = task.priority * 1000;
-        int affinityScore = workProfile != null
-            ? workProfile.GetAffinity(task.type) * 100
-            : 0;
-
-        int gridDistance = Mathf.Abs(
-            duplicantPosition.x - task.gridPosition.x
-        ) + Mathf.Abs(
-            duplicantPosition.y - task.gridPosition.y
-        );
-
-        int distancePenalty = Mathf.Min(gridDistance, 99);
-
-        return globalPriorityScore
-            + affinityScore
-            - distancePenalty;
-    }
-
-    private static void RefreshDynamicTaskPosition(Task task)
-    {
-        if (task.type != TaskType.HaulResource
-            || task.targetBlueprint != null
-            || task.targetItem == null
-            || GridManager.Instance == null)
-        {
-            return;
-        }
-
-        task.gridPosition = GridManager.Instance.WorldToGridPosition(
-            task.targetItem.transform.position
-        );
+        return TaskSelectionService.CalculateScore(
+            task,
+            duplicantPosition,
+            workProfile);
     }
 
     private void RemoveInvalidTasks(bool force = false)
     {
-        TrySubscribeToGrid();
-        if (isRemovingInvalidTasks)
-        {
-            return;
-        }
+        RefreshGridSubscription();
 
-        if (!force && lastInvalidTaskCleanupFrame == Time.frameCount)
-        {
-            return;
-        }
-
-        lastInvalidTaskCleanupFrame = Time.frameCount;
-
-        if (GridManager.Instance == null)
-        {
-            return;
-        }
-
-        isRemovingInvalidTasks = true;
-        List<Task> invalidTasks = pendingTasks.FindAll(task =>
-            !IsTaskValid(task));
-
-        foreach (Task task in invalidTasks)
-        {
-            if (!pendingTasks.Contains(task))
-            {
-                continue;
-            }
-
-            InterruptAssignedTask(
+        taskCleanup.Cleanup(
+            pendingTasks,
+            IsTaskValid,
+            task => taskCancellation.InterruptAssignedTask(
                 task,
                 TaskInterruptionOrigin.TaskInvalidated,
                 false,
-                true);
-            task.isAssigned = false;
-            RemoveTask(task);
-        }
-
-        isRemovingInvalidTasks = false;
+                true),
+            RemoveTask,
+            force);
     }
 
     public bool IsTaskValid(Task task)
     {
-        if (task == null || GridManager.Instance == null)
-        {
-            return false;
-        }
-
-        Tile tile = GridManager.Instance.GetTile(task.gridPosition);
-
-        switch (task.type)
-        {
-            case TaskType.HaulResource:
-                if (task.targetBlueprint != null)
-                {
-                    return task.targetBlueprint.CurrentState ==
-                               BlueprintState.WaitingMaterials
-                        && task.targetBlueprint.deliveredAmount <
-                           task.targetBlueprint.requiredAmount;
-                }
-
-                if (task.groundHaulPhase ==
-                    GroundHaulPhase.CarryingToStorage)
-                {
-                    return task.isAssigned
-                        && task.groundHaulRunner != null
-                        && task.groundHaulRunner.CanContinueGroundHaul(task);
-                }
-
-                return task.targetItem != null
-                    && task.targetItem.gameObject.activeInHierarchy
-                    && task.targetItem.IsReadyForHaul;
-
-            case TaskType.BuildTile:
-                return task.targetBlueprint != null
-                    && task.targetBlueprint.CurrentState ==
-                        BlueprintState.ReadyToBuild;
-
-            case TaskType.Dig:
-                return WorldInteractionService.Instance != null
-                    && WorldInteractionService.Instance.CanDigTile(
-                        task.gridPosition.x,
-                        task.gridPosition.y,
-                        out _);
-
-            case TaskType.Dismantle:
-                return WorldInteractionService.Instance != null
-                    && WorldInteractionService.Instance.CanDismantleAt(
-                        task.gridPosition,
-                        task.targetLayer);
-
-            default:
-                return false;
-        }
+        return taskValidator.IsValid(task);
+    }
+    public void ExecuteTask(
+        Task task,
+        DuplicantController dupe)
+    {
+        handlerRegistry.Execute(task, dupe);
     }
 
-    private static bool IsSameTask(Task existing, Task candidate)
+    public List<Vector2Int> GetPathToTask(
+        Vector2Int startPos,
+        Task task,
+        DuplicantCapabilityProfile profile = null)
     {
-        if (existing == null || candidate == null
-            || existing.type != candidate.type)
-        {
-            return false;
-        }
-
-        if (candidate.type == TaskType.HaulResource)
-        {
-            if (candidate.targetBlueprint != null)
-            {
-                return existing.targetBlueprint == candidate.targetBlueprint;
-            }
-
-            return candidate.targetItem != null
-                && existing.targetItem == candidate.targetItem;
-        }
-
-        if (candidate.type == TaskType.Dismantle)
-        {
-            return existing.gridPosition == candidate.gridPosition
-                && existing.targetLayer == candidate.targetLayer;
-        }
-
-        return existing.gridPosition == candidate.gridPosition;
-    }
-
-    public void ExecuteTask(Task task, DuplicantController dupe)
-    {
-        if (task == null) return;
-
-        ITaskHandler handler = GetHandler(task.type);
-        handler?.StartTask(dupe, task, null);
-    }
-
-    public List<Vector2Int> GetPathToTask(Vector2Int startPos, Task task, DuplicantCapabilityProfile profile = null)
-    {
-        return TaskNavigationUtility.GetPathToTask(startPos, task, profile);
+        return TaskNavigationUtility.GetPathToTask(
+            startPos,
+            task,
+            profile);
     }
 }

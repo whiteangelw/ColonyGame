@@ -4,7 +4,7 @@ using UnityEngine;
     fileName = "NewCapabilityProfile",
     menuName = "Pathfinding/Capability Profile"
 )]
-public class DuplicantCapabilityProfile : ScriptableObject
+public class DuplicantCapabilityProfile : ScriptableObject, INavigationProfile
 {
     [Header("Limites Físicos (Blocos)")]
 

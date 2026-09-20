@@ -1,26 +1,9 @@
 using UnityEngine;
 
-public enum RewardCardType
-{
-    Resource,
-    Duplicant,
-    Recipe,
-    Bonus
-}
+public enum RewardCardType { Resource, Duplicant, Recipe, Bonus }
+public enum RewardRarity { Common, Uncommon, Rare, Epic, Legendary }
 
-public enum RewardRarity
-{
-    Common,
-    Uncommon,
-    Rare,
-    Epic,
-    Legendary
-}
-
-[CreateAssetMenu(
-    fileName = "NewRewardCard",
-    menuName = "Rewards/Reward Card"
-)]
+[CreateAssetMenu(fileName = "NewRewardCard", menuName = "Rewards/Reward Card")]
 public class RewardCardDefinition : ScriptableObject
 {
     [Header("Apresentação")]
@@ -41,20 +24,30 @@ public class RewardCardDefinition : ScriptableObject
     [Header("Recompensa de duplicant")]
     public DuplicantDefinition duplicantDefinition;
 
-    [Header("Recompensa de receita")]
-    [Tooltip("Definition Id do BuildDefinitionSO. Use este campo em cartas novas.")]
-    public string recipeDefinitionId;
+    [Header("Recompensa de construção")]
+    [Tooltip("Arraste a BuildDefinitionSO que esta carta libera.")]
+    public BuildDefinitionSO recipeDefinition;
 
-    [Tooltip("Compatibilidade com cartas antigas. Ignorado quando o ID acima está preenchido.")]
+    [Header("Compatibilidade legada — não preencher em cartas novas")]
+    [Tooltip("ID antigo. Usado somente se Recipe Definition estiver vazio.")]
+    public string recipeDefinitionId;
+    [Tooltip("TileType antigo. Usado somente se os dois campos acima estiverem vazios.")]
     public TileType recipeTileType;
 
-    public bool HasRecipeDefinitionId =>
-        !string.IsNullOrWhiteSpace(recipeDefinitionId);
+    public bool HasRecipeDefinition => recipeDefinition != null;
+    public bool HasRecipeDefinitionId => !string.IsNullOrWhiteSpace(recipeDefinitionId);
+
+    public BuildDefinitionSO ResolveRecipeDefinition()
+    {
+        if (recipeDefinition != null) return recipeDefinition;
+        return HasRecipeDefinitionId
+            ? BuildCatalogService.Instance?.GetById(recipeDefinitionId)
+            : null;
+    }
 
     public float GetWeightedChance()
     {
-        return Mathf.Max(0.01f, selectionWeight)
-            * GetRarityMultiplier();
+        return Mathf.Max(0.01f, selectionWeight) * GetRarityMultiplier();
     }
 
     public Color GetRarityColor()
