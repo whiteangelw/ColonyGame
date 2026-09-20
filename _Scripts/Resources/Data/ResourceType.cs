@@ -7,5 +7,9 @@ public enum ResourceType
     Iron,    // Ferro
     Gold,          // Ouro
     WildBerry,     // Fruta crua
-    PreparedMeal   // Refeição preparada
+    PreparedMeal,  // Refeição preparada
+    Log,           // Madeira bruta
+    Seed,          // Semente
+    Plank,          // Tábua processada
+    WildMushroom
 }

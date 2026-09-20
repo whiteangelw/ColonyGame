@@ -4,19 +4,30 @@ using UnityEngine;
 
 public class ReachabilityManager : Singleton<ReachabilityManager>
 {
+    private static readonly HashSet<Vector2Int> EmptyReachableSet =
+        new HashSet<Vector2Int>();
+
     [Header("Performance")]
     [SerializeField, Min(0.05f)]
     private float minimumRecalculationInterval = 0.25f;
 
-    [SerializeField, Min(8)] private int maximumCachedOrigins = 128;
+    [SerializeField, Min(8)]
+    private int maximumCachedOrigins = 128;
 
     private NavGraphGenerator navGraph;
+
     private readonly Dictionary<ReachabilityCacheKey, HashSet<Vector2Int>>
         reachablePositionsCache =
             new Dictionary<ReachabilityCacheKey, HashSet<Vector2Int>>();
+
     private readonly HashSet<DuplicantController> registeredDuplicants =
         new HashSet<DuplicantController>();
+
+    private readonly Queue<NavNode> traversalQueue =
+        new Queue<NavNode>();
+
     public bool IsReady { get; private set; }
+
     private GridManager subscribedGridManager;
     private bool recalculationPending;
     private float nextAllowedRecalculationTime;
@@ -25,20 +36,38 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
     {
         navGraph = NavGraphGenerator.Instance;
         RegisterExistingDuplicants();
+
         subscribedGridManager = GridManager.Instance;
+
         if (subscribedGridManager != null)
         {
             subscribedGridManager.OnGridRebuilt += RequestRecalculation;
             subscribedGridManager.OnTileChanged += OnTileChanged;
 
-            if (subscribedGridManager.IsGridReady) RequestRecalculation();
+            if (subscribedGridManager.IsGridReady)
+            {
+                RequestRecalculation();
+            }
         }
     }
 
     private void LateUpdate()
     {
-        if (!recalculationPending
+        if (SaveGameRuntime.IsLoading
+            || !recalculationPending
             || Time.unscaledTime < nextAllowedRecalculationTime)
+        {
+            return;
+        }
+
+        if (navGraph == null)
+        {
+            navGraph = NavGraphGenerator.Instance;
+        }
+
+        // Aguarda o NavGraph processar as regiões alteradas antes de
+        // reconstruir o cache de alcance.
+        if (navGraph != null && navGraph.HasPendingNavigationUpdates)
         {
             return;
         }
@@ -49,7 +78,10 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
 
     private void OnDestroy()
     {
-        if (subscribedGridManager == null) return;
+        if (subscribedGridManager == null)
+        {
+            return;
+        }
 
         subscribedGridManager.OnGridRebuilt -= RequestRecalculation;
         subscribedGridManager.OnTileChanged -= OnTileChanged;
@@ -67,8 +99,14 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
 
     public void RecalculateAllGroups()
     {
-        if (navGraph == null) navGraph = NavGraphGenerator.Instance;
-        if (navGraph == null || !navGraph.IsGraphReady || GridManager.Instance == null)
+        if (navGraph == null)
+        {
+            navGraph = NavGraphGenerator.Instance;
+        }
+
+        if (navGraph == null
+            || !navGraph.IsGraphReady
+            || GridManager.Instance == null)
         {
             RequestRecalculation();
             return;
@@ -78,6 +116,7 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
         reachablePositionsCache.Clear();
 
         IsReady = true;
+
         nextAllowedRecalculationTime =
             Time.unscaledTime + minimumRecalculationInterval;
 
@@ -98,8 +137,7 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
                 && CanReach(
                     duplicant.gridPosition,
                     targetPosition,
-                    duplicant.capabilityProfile
-                ))
+                    duplicant.capabilityProfile))
             {
                 return true;
             }
@@ -129,8 +167,7 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
         DuplicantController[] duplicants =
             UnityEngine.Object.FindObjectsByType<DuplicantController>(
                 FindObjectsInactive.Exclude,
-                FindObjectsSortMode.None
-            );
+                FindObjectsSortMode.None);
 
         foreach (DuplicantController duplicant in duplicants)
         {
@@ -143,37 +180,47 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
         Vector2Int targetPosition,
         DuplicantCapabilityProfile profile = null)
     {
-        if (!IsReady) return false;
+        if (!IsReady)
+        {
+            return false;
+        }
 
         HashSet<Vector2Int> reachable = GetReachablePositions(
             dupePos,
-            profile
-        );
+            profile);
 
         return reachable.Contains(targetPosition);
     }
 
     /// <summary>
-    /// Verifica se existe uma posição de interação alcançável a partir do colono.
+    /// Verifica se existe uma posição de interação alcançável pelo colono.
     /// </summary>
-    public bool CanReach(Vector2Int dupePos, Vector2Int taskTargetPos, DuplicantCapabilityProfile profile = null)
+    public bool CanReach(
+        Vector2Int dupePos,
+        Vector2Int taskTargetPos,
+        DuplicantCapabilityProfile profile = null)
     {
-        if (!IsReady || navGraph == null) return false;
+        if (!IsReady || navGraph == null)
+        {
+            return false;
+        }
 
         DuplicantCapabilityProfile effectiveProfile =
             profile != null ? profile : navGraph.DefaultProfile;
 
-        if (effectiveProfile == null) return false;
+        if (effectiveProfile == null)
+        {
+            return false;
+        }
 
         HashSet<Vector2Int> reachable = GetReachablePositions(
             dupePos,
-            effectiveProfile
-        );
+            effectiveProfile);
 
         int interactionRange = Mathf.Max(
             1,
-            effectiveProfile.buildAndDigRange
-        );
+            effectiveProfile.buildAndDigRange);
+
         int horizontalRange = Mathf.Min(2, interactionRange);
         int maximumVerticalOffset = interactionRange - 1;
 
@@ -184,7 +231,10 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
                 Vector2Int standCandidate =
                     taskTargetPos - new Vector2Int(dx, dy);
 
-                if (reachable.Contains(standCandidate)) return true;
+                if (reachable.Contains(standCandidate))
+                {
+                    return true;
+                }
             }
         }
 
@@ -200,15 +250,16 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
 
         if (effectiveProfile == null)
         {
-            return new HashSet<Vector2Int>();
+            return EmptyReachableSet;
         }
 
         ReachabilityCacheKey key = new ReachabilityCacheKey(
             startPosition,
-            effectiveProfile
-        );
+            effectiveProfile);
 
-        if (reachablePositionsCache.TryGetValue(key, out HashSet<Vector2Int> cached))
+        if (reachablePositionsCache.TryGetValue(
+                key,
+                out HashSet<Vector2Int> cached))
         {
             return cached;
         }
@@ -220,10 +271,10 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
 
         HashSet<Vector2Int> reachable = BuildReachableSet(
             startPosition,
-            effectiveProfile
-        );
+            effectiveProfile);
 
         reachablePositionsCache[key] = reachable;
+
         return reachable;
     }
 
@@ -232,23 +283,24 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
         DuplicantCapabilityProfile profile)
     {
         HashSet<Vector2Int> visited = new HashSet<Vector2Int>();
+
         NavNode startNode = navGraph.GetNode(startPosition);
 
         if (startNode == null
-            || !navGraph.IsStandablePosition(
+            || !navGraph.IsNavigablePosition(
                 startPosition.x,
                 startPosition.y))
         {
             return visited;
         }
 
-        Queue<NavNode> open = new Queue<NavNode>();
-        open.Enqueue(startNode);
+        traversalQueue.Clear();
+        traversalQueue.Enqueue(startNode);
         visited.Add(startPosition);
 
-        while (open.Count > 0)
+        while (traversalQueue.Count > 0)
         {
-            NavNode current = open.Dequeue();
+            NavNode current = traversalQueue.Dequeue();
 
             foreach (NavEdge edge in current.connections)
             {
@@ -262,9 +314,13 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
                 }
 
                 Vector2Int target = edge.targetNode.gridPosition;
-                if (!visited.Add(target)) continue;
 
-                open.Enqueue(edge.targetNode);
+                if (!visited.Add(target))
+                {
+                    continue;
+                }
+
+                traversalQueue.Enqueue(edge.targetNode);
             }
         }
 
@@ -293,7 +349,8 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
 
         public override bool Equals(object obj)
         {
-            return obj is ReachabilityCacheKey other && Equals(other);
+            return obj is ReachabilityCacheKey other
+                && Equals(other);
         }
 
         public override int GetHashCode()
@@ -301,7 +358,8 @@ public class ReachabilityManager : Singleton<ReachabilityManager>
             unchecked
             {
                 int profileHash = profile != null
-                    ? System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(profile)
+                    ? System.Runtime.CompilerServices.RuntimeHelpers
+                        .GetHashCode(profile)
                     : 0;
 
                 return (startPosition.GetHashCode() * 397) ^ profileHash;

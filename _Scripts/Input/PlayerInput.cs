@@ -7,9 +7,11 @@ public enum InputMode
     Build,
     Dismantle,
     Haul,
+    Harvest,
     Cancel
 }
 
+[RequireComponent(typeof(InputContextService))]
 public class PlayerInput : MonoBehaviour
 {
     [Header("Modo e Seleção Atual")]
@@ -41,14 +43,18 @@ public class PlayerInput : MonoBehaviour
 
     private void HandleHotkeys()
     {
-        // 1. Processa atalhos de Prioridade (1 a 9)
-        int pressedPriority = GetPressedPriorityKey();
-        if (pressedPriority != -1)
+        if (InputContextService.Instance != null
+            && !InputContextService.Instance.IsGameplayKeyboardAllowed)
         {
-            ApplyPriorityToCurrentMode(pressedPriority);
+            return;
         }
 
-        // 2. Processa atalhos de Modos/Ferramentas
+        if (Keyboard.current == null)
+        {
+            return;
+        }
+
+        // Processa atalhos de modos/ferramentas.
         if (Keyboard.current.fKey.wasPressedThisFrame)
         {
             SetInputMode(InputMode.Dig);
@@ -72,44 +78,17 @@ public class PlayerInput : MonoBehaviour
             CloseBuildMenu();
         }
 
+        if (Keyboard.current.hKey.wasPressedThisFrame)
+        {
+            SetInputMode(InputMode.Harvest);
+            CloseBuildMenu();
+        }
+
 
         if (Keyboard.current.xKey.wasPressedThisFrame)
         {
             SetInputMode(InputMode.Cancel);
             CloseBuildMenu();
-        }
-    }
-
-    private int GetPressedPriorityKey()
-    {
-        if (Keyboard.current.digit1Key.wasPressedThisFrame) return 1;
-        if (Keyboard.current.digit2Key.wasPressedThisFrame) return 2;
-        if (Keyboard.current.digit3Key.wasPressedThisFrame) return 3;
-        if (Keyboard.current.digit4Key.wasPressedThisFrame) return 4;
-        if (Keyboard.current.digit5Key.wasPressedThisFrame) return 5;
-        if (Keyboard.current.digit6Key.wasPressedThisFrame) return 6;
-        if (Keyboard.current.digit7Key.wasPressedThisFrame) return 7;
-        if (Keyboard.current.digit8Key.wasPressedThisFrame) return 8;
-        if (Keyboard.current.digit9Key.wasPressedThisFrame) return 9;
-
-        return -1;
-    }
-
-    private void ApplyPriorityToCurrentMode(int priority)
-    {
-        if (PriorityManager.Instance == null) return;
-
-        switch (currentMode)
-        {
-            case InputMode.Dig:
-                PriorityManager.Instance.SetCategoryPriority(TaskType.Dig, priority);
-                break;
-            case InputMode.Build:
-                PriorityManager.Instance.SetCategoryPriority(TaskType.BuildTile, priority);
-                break;
-            case InputMode.Haul:
-                PriorityManager.Instance.SetCategoryPriority(TaskType.HaulResource, priority);
-                break;
         }
     }
 

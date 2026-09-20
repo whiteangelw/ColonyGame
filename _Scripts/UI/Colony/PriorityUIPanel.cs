@@ -32,6 +32,12 @@ public class PriorityUIPanel : MonoBehaviour
 
     private void Update()
     {
+        if (InputContextService.Instance != null
+            && !InputContextService.Instance.IsGameplayKeyboardAllowed)
+        {
+            return;
+        }
+
         // Pressionar a tecla 'P' usando o New Input System
         if (Keyboard.current != null && Keyboard.current.pKey.wasPressedThisFrame)
         {

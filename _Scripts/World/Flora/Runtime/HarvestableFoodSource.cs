@@ -2,41 +2,34 @@ using UnityEngine;
 using System.Collections.Generic;
 
 [DisallowMultipleComponent]
-public class HarvestableFoodSource : MonoBehaviour, IFoodSource
+public class HarvestableFoodSource : FloraEntity, IFoodSource
 {
-    [SerializeField] private FloraDefinitionSO definition;
-    [SerializeField, Min(0)] private int availablePortions;
-
     private DuplicantController reservedBy;
     private int reservedPortions;
 
-    public string FloraId => definition != null ? definition.floraId : string.Empty;
-    public int AvailablePortions => availablePortions;
-    public Vector2Int GridPosition => GridManager.Instance != null
-        ? GridManager.Instance.WorldToGridPosition(transform.position)
-        : Vector2Int.zero;
+    public int AvailablePortions => availableUnits;
     public bool IsEmergencyOnly => true;
     public FoodSourceKind SourceKind => FoodSourceKind.Flora;
-    public bool HasFood => availablePortions - reservedPortions > 0;
+    public bool HasFood => availableUnits - reservedPortions > 0;
+    public override bool CanHarvest => availableUnits > 0
+        && reservedBy == null;
 
     private void OnEnable()
     {
         FoodSourceRegistry.Instance?.Register(this);
     }
 
-    private void OnDisable()
+    protected override void OnDisable()
     {
         reservedBy = null;
         reservedPortions = 0;
         FoodSourceRegistry.Instance?.Unregister(this);
+        base.OnDisable();
     }
 
-    public void Initialize(FloraDefinitionSO floraDefinition, int portions = -1)
+    public override void Initialize(FloraDefinitionSO floraDefinition, int portions = -1)
     {
-        definition = floraDefinition;
-        availablePortions = portions >= 0
-            ? portions
-            : (definition != null ? definition.initialPortions : 1);
+        base.Initialize(floraDefinition, portions);
     }
 
     public void CollectFoodOptions(List<FoodOption> results)
@@ -48,11 +41,14 @@ public class HarvestableFoodSource : MonoBehaviour, IFoodSource
             resourceType = definition != null
                 ? definition.foodResourceType
                 : ResourceType.WildBerry,
-            availablePortions = availablePortions - reservedPortions,
+            availablePortions = availableUnits - reservedPortions,
             hungerRestoredPerPortion = definition != null
                 ? definition.hungerRestoredPerPortion
                 : 25f,
             isRawFood = definition == null || definition.isRawFood,
+            // Comer diretamente da planta continua sendo uma saída de
+            // emergência. Alimento colhido usa a regra do ItemDataSO.
+            allowPreventiveConsumption = false,
             quality = definition != null ? definition.foodQuality : 0
         });
     }
@@ -81,7 +77,7 @@ public class HarvestableFoodSource : MonoBehaviour, IFoodSource
             return reservedAmount > 0;
         }
 
-        reservedAmount = Mathf.Min(requestedPortions, availablePortions);
+        reservedAmount = Mathf.Min(requestedPortions, availableUnits);
         if (reservedAmount <= 0) return false;
 
         reservedBy = duplicant;
@@ -103,19 +99,19 @@ public class HarvestableFoodSource : MonoBehaviour, IFoodSource
         isRawFood = definition == null || definition.isRawFood;
 
         if (duplicant == null || reservedBy != duplicant
-            || reservedPortions <= 0 || availablePortions <= 0)
+            || reservedPortions <= 0 || availableUnits <= 0)
         {
             return false;
         }
 
-        availablePortions--;
+        availableUnits--;
         reservedPortions--;
         hungerRestored = definition != null
             ? definition.hungerRestoredPerPortion
             : 25f;
         if (reservedPortions <= 0) reservedBy = null;
 
-        if (availablePortions <= 0)
+        if (availableUnits <= 0)
         {
             FoodSourceRegistry.Instance?.Unregister(this);
             Destroy(gameObject);
@@ -131,5 +127,74 @@ public class HarvestableFoodSource : MonoBehaviour, IFoodSource
             reservedBy = null;
             reservedPortions = 0;
         }
+    }
+
+    public override bool TryHarvest(
+        out ResourceType resourceType,
+        out int harvestedAmount)
+    {
+        resourceType = definition != null
+            ? definition.foodResourceType
+            : ResourceType.WildBerry;
+        harvestedAmount = 0;
+
+        // Uma refeição de emergência já reservada tem precedência.
+        if (!CanHarvest) return false;
+
+        int unitsPerAction = definition != null
+            ? Mathf.Max(1, definition.harvestUnitsPerAction)
+            : 1;
+        harvestedAmount = Mathf.Min(unitsPerAction, availableUnits);
+        availableUnits -= harvestedAmount;
+
+        if (availableUnits <= 0)
+        {
+            FoodSourceRegistry.Instance?.Unregister(this);
+            FloraManager.Instance?.Unregister(this);
+            Destroy(gameObject);
+        }
+
+        return harvestedAmount > 0;
+    }
+
+    public override bool TryHarvest(out List<ResourceAmount> results)
+    {
+        results = new List<ResourceAmount>();
+        if (!CanHarvest) return false;
+
+        int unitsPerAction = definition != null
+            ? Mathf.Max(1, definition.harvestUnitsPerAction)
+            : 1;
+        int harvestedUnits = Mathf.Min(unitsPerAction, availableUnits);
+        availableUnits -= harvestedUnits;
+
+        if (definition != null && definition.HasConfiguredYields)
+        {
+            foreach (FloraYieldEntry entry in definition.yields)
+            {
+                if (entry == null) continue;
+                int amount = entry.Roll();
+                if (amount > 0)
+                {
+                    results.Add(new ResourceAmount(entry.resourceType, amount));
+                }
+            }
+        }
+        else
+        {
+            ResourceType type = definition != null
+                ? definition.foodResourceType
+                : ResourceType.WildBerry;
+            results.Add(new ResourceAmount(type, harvestedUnits));
+        }
+
+        if (availableUnits <= 0)
+        {
+            FoodSourceRegistry.Instance?.Unregister(this);
+            FloraManager.Instance?.Unregister(this);
+            Destroy(gameObject);
+        }
+
+        return results.Count > 0;
     }
 }

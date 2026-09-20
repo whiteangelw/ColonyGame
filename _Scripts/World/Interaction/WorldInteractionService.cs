@@ -1,7 +1,11 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 public class WorldInteractionService : Singleton<WorldInteractionService>
 {
+    private readonly List<TerrainDropResult> terrainDropBuffer =
+        new List<TerrainDropResult>(4);
+
     public bool CanDigTile(int x, int y, out string failureReason)
     {
         failureReason = string.Empty;
@@ -21,6 +25,17 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
             return false;
         }
 
+        // Terreno com uma definição de construção é conteúdo colocado pelo
+        // jogador. Ele deve ser desmontado para devolver o material correto,
+        // e não escavado como se fosse terreno natural.
+        BuildDefinitionSO builtDefinition =
+            GetBuildDefinitionAt(new Vector2Int(x, y), GridLayer.Terrain);
+        if (builtDefinition != null)
+        {
+            failureReason = "Esta é uma construção. Use Desmontar para recuperar materiais.";
+            return false;
+        }
+
         if (grid.IsRequiredStructureSupport(
             new Vector2Int(x, y), out GridOccupancyRecord record))
         {
@@ -37,21 +52,29 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
     {
         if (!CanDigTile(x, y, out _)) return;
 
-        Tile tile = GridManager.Instance.GetTile(x, y);
+        GridManager grid = GridManager.Instance;
+        Tile tile = grid.GetTile(x, y);
+        TileType excavatedType = tile.type;
 
-        ResourceType? droppedResource = GetResourceTypeFromTile(tile.type);
-
-        GridManager.Instance.SetTileType(x, y, TileType.Empty);
-
-        if (droppedResource.HasValue)
+        // O sorteio ocorre somente depois de CanDigTile confirmar a ação e
+        // imediatamente antes de gerar os itens. Cancelamentos anteriores não
+        // criam nem reservam recursos.
+        terrainDropBuffer.Clear();
+        TerrainCatalogService terrainCatalog = TerrainCatalogService.Instance;
+        if (terrainCatalog != null
+            && terrainCatalog.TryGetDefinition(
+                excavatedType,
+                out TerrainDefinitionSO definition))
         {
-            float cellSize = GridManager.Instance.cellSize;
-            Vector3 spawnPos = new Vector3(x * cellSize + cellSize / 2f, y * cellSize + cellSize / 2f, 0);
-
-            ItemSpawner.Instance?.SpawnResource(droppedResource.Value, spawnPos);
-            StockpileManager.Instance?.RefreshReachableResources();
-            GameEvents.TriggerFloatingTextRequested($"+1 {droppedResource.Value}", spawnPos, Color.green);
+            definition.RollDrops(terrainDropBuffer);
         }
+        else
+        {
+            terrainCatalog?.WarnMissingDefinition(excavatedType);
+        }
+
+        grid.SetTileType(x, y, TileType.Empty);
+        SpawnTerrainDrops(x, y);
     }
 
     /// <summary>
@@ -117,8 +140,17 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
 
         if (layer == GridLayer.Structure)
         {
-            return GridManager.Instance.GetOccupantAt(position, layer)
-                is IDismantlable;
+            UnityEngine.Object occupant =
+                GridManager.Instance.GetOccupantAt(position, layer);
+            if (!(occupant is IDismantlable)) return false;
+
+            string id = GridManager.Instance.GetContentId(
+                position.x,
+                position.y,
+                GridLayer.Structure);
+            BuildDefinitionSO definition =
+                BuildCatalogService.Instance?.GetById(id);
+            return definition == null || definition.CanBeDismantled;
         }
 
         TileType tileType = GridManager.Instance.GetTileType(
@@ -128,6 +160,12 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
 
         if (layer == GridLayer.Terrain)
         {
+            BuildDefinitionSO definition = GetBuildDefinitionAt(position, layer);
+            if (definition != null)
+            {
+                return definition.CanBeDismantled;
+            }
+
             return tileType == TileType.Ladder
                 || tileType == TileType.Chest
                 || tileType == TileType.PrintingPod;
@@ -177,6 +215,14 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
             return;
         }
 
+        if (layer == GridLayer.Structure
+            && occupant is ConfiguredStructure configured)
+        {
+            StructureManager.Instance?.DismantleStructureAt(
+                configured.GridPosition);
+            return;
+        }
+
         TileType targetType = GridManager.Instance.GetTileType(x, y, layer);
         string contentId = GridManager.Instance.GetContentId(x, y, layer);
         BuildDefinitionSO definition =
@@ -193,6 +239,14 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
             StructureManager.Instance?.DismantleStructureAt(
                 new Vector2Int(x, y)
             );
+        }
+        else if (layer == GridLayer.Terrain && definition != null)
+        {
+            ClearAndRefundBuiltTile(
+                x,
+                y,
+                layer,
+                definition);
         }
         else if (targetType == TileType.Ladder
             || layer == GridLayer.BackWall
@@ -226,18 +280,73 @@ public class WorldInteractionService : Singleton<WorldInteractionService>
         }
     }
 
-    private ResourceType? GetResourceTypeFromTile(TileType tileType)
+    private static BuildDefinitionSO GetBuildDefinitionAt(
+        Vector2Int position,
+        GridLayer layer)
     {
-        switch (tileType)
+        string contentId = GridManager.Instance?.GetContentId(
+            position.x,
+            position.y,
+            layer);
+        return BuildCatalogService.Instance?.GetById(contentId);
+    }
+
+    private static void ClearAndRefundBuiltTile(
+        int x,
+        int y,
+        GridLayer layer,
+        BuildDefinitionSO definition)
+    {
+        float cellSize = GridManager.Instance.cellSize;
+        Vector3 spawnPosition = new Vector3(
+            x * cellSize + cellSize / 2f,
+            y * cellSize + cellSize / 2f,
+            0f);
+
+        GridManager.Instance.SetTileType(x, y, TileType.Empty, layer);
+
+        if (definition.RefundAmount > 0)
         {
-            case TileType.Solid:
-            case TileType.Grass: return ResourceType.Dirt;
-            case TileType.Stone: return ResourceType.Stone;
-            case TileType.Copper: return ResourceType.Copper;
-            case TileType.Coal: return ResourceType.Coal;
-            case TileType.Iron: return ResourceType.Iron;
-            case TileType.Gold: return ResourceType.Gold;
-            default: return null;
+            ItemSpawner.Instance?.SpawnResource(
+                definition.RequiredResource,
+                spawnPosition,
+                definition.RefundAmount);
         }
+
+        StockpileManager.Instance?.RefreshReachableResources();
+        GameEvents.TriggerFloatingTextRequested(
+            "Construção desmontada",
+            spawnPosition,
+            Color.yellow);
+    }
+
+    private void SpawnTerrainDrops(int x, int y)
+    {
+        if (terrainDropBuffer.Count == 0) return;
+
+        float cellSize = GridManager.Instance.cellSize;
+        Vector3 spawnPosition = new Vector3(
+            x * cellSize + cellSize / 2f,
+            y * cellSize + cellSize / 2f,
+            0f);
+
+        for (int i = 0; i < terrainDropBuffer.Count; i++)
+        {
+            TerrainDropResult drop = terrainDropBuffer[i];
+            if (drop.Amount <= 0) continue;
+
+            ItemSpawner.Instance?.SpawnResource(
+                drop.ResourceType,
+                spawnPosition,
+                drop.Amount);
+            GameEvents.TriggerFloatingTextRequested(
+                $"+{drop.Amount} {drop.ResourceType}",
+                spawnPosition,
+                Color.green);
+        }
+
+        // ItemSpawner já solicita uma atualização agrupada. Esta chamada
+        // mantém compatibilidade com os consumidores atuais do estoque.
+        StockpileManager.Instance?.RefreshReachableResources();
     }
 }

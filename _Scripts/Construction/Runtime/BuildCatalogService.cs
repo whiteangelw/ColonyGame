@@ -6,7 +6,7 @@ public sealed class BuildCatalogService : Singleton<BuildCatalogService>
     [SerializeField] private BuildCatalogSO catalog;
 
     private readonly Dictionary<string, BuildDefinitionSO> byId =
-        new Dictionary<string, BuildDefinitionSO>();
+        new Dictionary<string, BuildDefinitionSO>(System.StringComparer.Ordinal);
     private bool initialized;
 
     public IReadOnlyList<BuildDefinitionSO> Definitions
@@ -64,15 +64,16 @@ public sealed class BuildCatalogService : Singleton<BuildCatalogService>
                 continue;
             }
 
-            if (byId.ContainsKey(definition.DefinitionId))
+            string normalizedId = definition.DefinitionId.Trim();
+            if (byId.ContainsKey(normalizedId))
             {
                 Debug.LogError(
-                    $"[BuildCatalogService] ID duplicado: {definition.DefinitionId}",
+                    $"[BuildCatalogService] ID duplicado: {normalizedId}",
                     definition);
                 continue;
             }
 
-            byId.Add(definition.DefinitionId, definition);
+            byId.Add(normalizedId, definition);
         }
     }
 
